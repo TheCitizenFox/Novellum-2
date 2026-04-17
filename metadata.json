@@ -1,0 +1,5 @@
+{
+  "name": "Novellum",
+  "description": "A local-first, scene-based writing app for long-form creative work, centered on manuscript drafting, scene organization, inspiration snippet access, and deterministic pasted-text cleanup.",
+  "requestFramePermissions": []
+}

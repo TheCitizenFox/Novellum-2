@@ -1,0 +1,92 @@
+@import '@fontsource/mona-sans/index.css';
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Mona Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-bg-main: var(--bg-main);
+  --color-bg-panel: var(--bg-panel);
+  --color-bg-card: var(--bg-card);
+  --color-bg-hover: var(--bg-hover);
+  --color-text-main: var(--text-main);
+  --color-text-muted: var(--text-muted);
+  --color-accent-primary: var(--accent-primary);
+  --color-accent-hover: var(--accent-hover);
+}
+
+:root {
+  /* Ignite (Original Orange) */
+  --bg-main: #121214;
+  --bg-panel: #18181b;
+  --bg-card: #27272a;
+  --bg-hover: #3f3f46;
+  --text-main: #f4f4f5;
+  --text-muted: #a1a1aa;
+  --accent-primary: #ff6b35;
+  --accent-hover: #ff8c42;
+  --shadow-accent: rgba(255, 107, 53, 0.4);
+}
+
+:root[data-theme="twilight"] {
+  /* Twilight (Purple) */
+  --bg-main: #15151A;
+  --bg-panel: #1C1C24;
+  --bg-card: #252530;
+  --bg-hover: #2D2D3A;
+  --text-main: #ffffff;
+  --text-muted: #9E9EA8;
+  --accent-primary: #8B7BFF;
+  --accent-hover: #A296FF;
+  --shadow-accent: rgba(139, 123, 255, 0.4);
+}
+
+:root[data-theme="forest"] {
+  /* Forest (Green) */
+  --bg-main: #111412;
+  --bg-panel: #161B18;
+  --bg-card: #202924;
+  --bg-hover: #2A3831;
+  --text-main: #f4f4f5;
+  --text-muted: #9CA8A1;
+  --accent-primary: #10b981;
+  --accent-hover: #34d399;
+  --shadow-accent: rgba(16, 185, 129, 0.4);
+}
+
+:root[data-theme="ocean"] {
+  /* Ocean (Blue) */
+  --bg-main: #0F141A;
+  --bg-panel: #151C24;
+  --bg-card: #1E2936;
+  --bg-hover: #2A3A4C;
+  --text-main: #f4f4f5;
+  --text-muted: #94A3B8;
+  --accent-primary: #3b82f6;
+  --accent-hover: #60a5fa;
+  --shadow-accent: rgba(59, 130, 246, 0.4);
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-main);
+  color: var(--text-main);
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  .mask-edges {
+    mask-image: linear-gradient(to right, transparent, black 10px, black calc(100% - 10px), transparent);
+  }
+}
