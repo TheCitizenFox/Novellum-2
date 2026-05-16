@@ -1,9 +1,30 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAppStore } from '../store';
-import { Settings as SettingsIcon, Download, FileText, Type, AlignLeft, Scissors, Trash2, ChevronRight, Palette } from 'lucide-react';
+import { Settings as SettingsIcon, Download, FileText, Type, AlignLeft, Scissors, Trash2, ChevronRight, Palette, ChevronDown, Check } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+
+const THEMES = [
+  { id: 'ignite', name: 'Ignite', colors: ['#121214', '#18181b', '#27272a', '#ff6b35'] },
+  { id: 'twilight', name: 'Twilight', colors: ['#15151A', '#1C1C24', '#252530', '#8B7BFF'] },
+  { id: 'forest', name: 'Forest', colors: ['#111412', '#161B18', '#202924', '#10b981'] },
+  { id: 'ocean', name: 'Ocean', colors: ['#0F141A', '#151C24', '#1E2936', '#3b82f6'] },
+  { id: 'velvet', name: 'Velvet', colors: ['#171520', '#201d2e', '#2f2a42', '#ff66a3'] },
+  { id: 'nebula', name: 'Nebula', colors: ['#0B0E14', '#11151F', '#1A212E', '#00E6F2'] },
+  { id: 'monochrome', name: 'Mono', colors: ['#000000', '#0a0a0a', '#171717', '#ffffff'] },
+  { id: 'mocha', name: 'Mocha', colors: ['#1c1917', '#292524', '#44403c', '#d97706'] },
+  { id: 'cyberpunk', name: 'Cyberpunk', colors: ['#050511', '#0d0d26', '#1a1a4c', '#f0f000'] },
+  { id: 'minimal', name: 'Minimal', colors: ['#fafafa', '#f4f4f5', '#e4e4e7', '#18181b'] },
+  { id: 'synthwave', name: 'Synthwave', colors: ['#0d0221', '#190442', '#2a0a69', '#ff007f'] },
+  { id: 'rust', name: 'Rust', colors: ['#18110c', '#2c1e16', '#4a3225', '#b7410e'] },
+  { id: 'sage', name: 'Sage', colors: ['#111513', '#1c2420', '#2a3630', '#7a9e7e'] },
+  { id: 'matcha', name: 'Matcha', colors: ['#141914', '#1e261e', '#2e3a2e', '#98b06e'] },
+  { id: 'lavender', name: 'Lavender', colors: ['#14121a', '#221e2c', '#342d45', '#c3a6ff'] },
+  { id: 'royal', name: 'Royal', colors: ['#0f0a1c', '#1b1233', '#2a1d4f', '#ffd700'] },
+];
 
 export const Settings: React.FC = () => {
   const { state, dispatch } = useAppStore();
+  const [isThemesOpen, setIsThemesOpen] = useState(false);
 
   const handleToggle = (key: keyof typeof state.settings) => {
     dispatch({
@@ -184,43 +205,93 @@ export const Settings: React.FC = () => {
 
         <section>
           <h3 className="text-text-muted text-xs font-semibold uppercase tracking-wider mb-3 px-4">Appearance</h3>
-          <div className="bg-bg-panel rounded-3xl p-4 shadow-[0_4px_20px_rgba(0,0,0,0.2)] border border-[rgba(255,255,255,0.03)]">
-            <div className="flex items-center gap-4 mb-4 px-2">
-              <div className="w-10 h-10 rounded-2xl bg-bg-card flex items-center justify-center shrink-0">
-                <Palette size={18} className="text-text-muted" />
+          <div className="bg-bg-panel rounded-3xl shadow-[0_4px_20px_rgba(0,0,0,0.2)] border border-[rgba(255,255,255,0.03)] overflow-hidden">
+            <button 
+              onClick={() => setIsThemesOpen(!isThemesOpen)}
+              className="w-full flex items-center justify-between gap-4 py-4 px-4 hover:bg-[rgba(255,255,255,0.02)] transition-colors text-left"
+            >
+              <div className="flex items-center gap-4 flex-1 min-w-0">
+                <div className="w-10 h-10 rounded-2xl bg-bg-card flex items-center justify-center shrink-0">
+                  <Palette size={18} className="text-text-muted" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="text-white font-medium tracking-wide block truncate">Color Theme</span>
+                  <span className="text-text-muted text-xs block truncate">Customize your interface palette</span>
+                </div>
               </div>
-              <div className="flex-1 min-w-0">
-                <span className="text-white font-medium tracking-wide block truncate">Color Theme</span>
-                <span className="text-text-muted text-xs block truncate">Choose your preferred aesthetic</span>
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-2">
-              {[
-                { id: 'ignite', name: 'Ignite', color: '#ff6b35' },
-                { id: 'twilight', name: 'Twilight', color: '#8B7BFF' },
-                { id: 'forest', name: 'Forest', color: '#10b981' },
-                { id: 'ocean', name: 'Ocean', color: '#3b82f6' }
-              ].map((theme) => (
-                <button
-                  key={theme.id}
-                  onClick={() => handleThemeChange(theme.id)}
-                  className={`flex flex-col items-center gap-2 p-3 rounded-2xl border transition-all ${
-                    state.settings.theme === theme.id 
-                      ? 'bg-bg-card border-white/20 shadow-md' 
-                      : 'bg-transparent border-transparent hover:bg-bg-hover'
-                  }`}
+              <div className="flex items-center gap-3">
+                {/* Active Theme Preview Dots - Only show when closed */}
+                <AnimatePresence>
+                  {!isThemesOpen && (
+                    <motion.div 
+                      className="hidden sm:flex -space-x-1.5 mr-2"
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.8 }}
+                    >
+                      {THEMES.find(t => t.id === state.settings.theme)?.colors.map((color, i) => (
+                        <div 
+                          key={i}
+                          className="w-5 h-5 rounded-full border border-bg-panel shadow-sm"
+                          style={{ backgroundColor: color, zIndex: 10 - i }}
+                        />
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                <motion.div
+                  animate={{ rotate: isThemesOpen ? 180 : 0 }}
+                  transition={{ duration: 0.3, ease: "easeInOut" }}
                 >
-                  <div 
-                    className="w-8 h-8 rounded-full shadow-inner"
-                    style={{ backgroundColor: theme.color }}
-                  />
-                  <span className={`text-xs font-medium ${state.settings.theme === theme.id ? 'text-white' : 'text-text-muted'}`}>
-                    {theme.name}
-                  </span>
-                </button>
-              ))}
-            </div>
+                  <ChevronDown size={18} className="text-text-muted shrink-0" />
+                </motion.div>
+              </div>
+            </button>
+            <AnimatePresence>
+              {isThemesOpen && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 pt-0 border-t border-[rgba(255,255,255,0.03)] mt-2">
+                    {THEMES.map((theme) => {
+                      const isActive = state.settings.theme === theme.id;
+                      return (
+                        <button
+                          key={theme.id}
+                          onClick={() => handleThemeChange(theme.id)}
+                          className={`relative flex flex-col items-center justify-center gap-3 py-5 px-3 rounded-2xl border transition-all overflow-hidden group active:scale-95 ${
+                            isActive 
+                              ? 'bg-bg-card border-white/20 shadow-md ring-1 ring-white/10' 
+                              : 'bg-transparent border-[rgba(255,255,255,0.02)] hover:bg-bg-hover/50 hover:border-white/10'
+                          }`}
+                        >
+                          {isActive && (
+                            <div className="absolute top-2.5 right-2.5 text-accent-primary">
+                              <Check size={14} />
+                            </div>
+                          )}
+                          <span className={`text-[13px] font-semibold tracking-wide ${isActive ? 'text-white' : 'text-text-muted group-hover:text-white/80'}`}>
+                            {theme.name}
+                          </span>
+                          <div className="flex -space-x-2.5">
+                            {theme.colors.map((color, i) => (
+                              <div 
+                                key={i}
+                                className={`w-8 h-8 rounded-full border-2 transition-transform duration-300 shadow-sm ${isActive ? 'border-bg-card' : 'border-bg-panel group-hover:border-bg-hover/50'}`}
+                                style={{ backgroundColor: color, zIndex: 10 - i }}
+                              />
+                            ))}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </section>
 
@@ -297,6 +368,16 @@ export const Settings: React.FC = () => {
                 onChange={handleImportJson}
               />
             </label>
+            <ActionItem
+              icon={Palette}
+              title="Generate Manual Graphic"
+              description="Create an annotated infographic of the UI"
+              onClick={() => {
+                dispatch({ type: 'SET_ACTIVE_VIEW', payload: 'editor' }); // Force to editor view
+                dispatch({ type: 'SET_INFOGRAPHIC_MODE', payload: true });
+                dispatch({ type: 'SET_SIDEBAR_OPEN', payload: true }); // Make sure sidebar is open for the graphic
+              }}
+            />
           </div>
         </section>
 

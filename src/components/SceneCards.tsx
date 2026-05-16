@@ -28,8 +28,16 @@ export const SceneCards: React.FC = () => {
     });
   };
 
-  const getWordCount = (content: string) => {
-    return content.trim() ? content.trim().split(/\s+/).length : 0;
+  const getWordCount = (scene: import('../types').Scene) => {
+    let text = '';
+    if (scene.beats) {
+      scene.beats.forEach(beat => {
+        text += ' ' + beat.content;
+      });
+    }
+    text += ' ' + scene.content;
+    const content = text.trim();
+    return content ? content.split(/\s+/).length : 0;
   };
 
   if (!isMounted) return null;
@@ -168,7 +176,7 @@ export const SceneCards: React.FC = () => {
                               <div className="mt-4 flex items-center justify-between shrink-0 pt-4 border-t border-[rgba(255,255,255,0.05)]">
                                 <div className="flex items-center gap-1.5 text-xs text-text-muted font-mono shrink-0 bg-bg-card px-3 py-1.5 rounded-lg" title="Word Count">
                                   <Hash size={14} className="text-accent-primary" />
-                                  {getWordCount(scene.content)} words
+                                  {getWordCount(scene)} words
                                 </div>
                                 <button
                                   onClick={() => {

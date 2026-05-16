@@ -36,7 +36,7 @@ export const RightPanel: React.FC = () => {
   );
 
   return (
-    <div className="w-full bg-bg-main flex flex-col h-full z-20 border-l border-[rgba(255,255,255,0.05)] shadow-2xl xl:shadow-none">
+    <div className="w-full bg-bg-main flex flex-col h-full z-20">
       <div className="p-4 flex items-center justify-between shrink-0 border-b border-[rgba(255,255,255,0.05)] bg-bg-panel">
         <div className="flex bg-bg-card rounded-xl p-1 w-full relative">
           <button
@@ -55,7 +55,7 @@ export const RightPanel: React.FC = () => {
               activeTab === 'staging' ? "bg-[var(--accent-primary)] text-white shadow-sm" : "text-text-muted hover:text-white hover:bg-bg-hover/50"
             )}
           >
-            <Layers size={14} /> Staging
+            <MessageSquare size={14} /> Library
           </button>
           <button
             onClick={() => setActiveTab('notes')}
@@ -145,11 +145,11 @@ export const RightPanel: React.FC = () => {
               <div className="relative mb-4 group">
                 <div className="absolute inset-0 bg-[var(--accent-primary)] rounded-2xl blur-xl opacity-20 group-hover:opacity-40 transition-opacity" />
                 <div className="w-16 h-16 bg-bg-card rounded-2xl flex items-center justify-center relative z-10 shadow-lg">
-                  <Layers size={24} className="text-accent-primary" />
+                  <MessageSquare size={24} className="text-accent-primary" />
                 </div>
               </div>
-              <p className="text-white font-bold text-sm mb-1">Shelf is Empty</p>
-              <p className="text-text-muted text-xs">Add items from the main Staging view.</p>
+              <p className="text-white font-bold text-sm mb-1">Library is Empty</p>
+              <p className="text-text-muted text-xs">Add items from the main Library view.</p>
             </div>
           )
         ) : (

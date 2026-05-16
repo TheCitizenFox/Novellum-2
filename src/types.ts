@@ -1,9 +1,16 @@
 export type SceneStatus = 'draft' | 'revised' | 'final';
 
+export interface Beat {
+  id: string;
+  label: string;
+  content: string;
+}
+
 export interface Scene {
   id: string;
   title: string;
   content: string;
+  beats?: Beat[];
   synopsis: string;
   purpose: string;
   status: SceneStatus;
@@ -58,14 +65,17 @@ export interface AppNotification {
 
 export interface AppState {
   project: Project;
+  pastProjects: Project[];
+  futureProjects: Project[];
   snapshots: Snapshot[];
   snippets: Snippet[];
   stagingItems: StagingItem[];
   settings: CleanupSettings;
   activeSceneId: string | null;
-  activeView: 'editor' | 'cards' | 'vault' | 'staging' | 'settings';
+  activeView: 'editor' | 'cards' | 'vault' | 'staging' | 'settings' | 'manuscript';
   isSidebarOpen: boolean;
   isRightPanelOpen: boolean;
+  isInfographicMode: boolean;
   saveError?: string | null;
   lastSaved?: number | null;
   notification?: AppNotification | null;

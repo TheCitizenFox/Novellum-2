@@ -2,6 +2,8 @@ import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import { AppState, Project, Chapter, Scene, Snippet, StagingItem, CleanupSettings, SceneStatus, Snapshot, AppNotification } from './types';
 
 type Action =
+  | { type: 'UNDO' }
+  | { type: 'REDO' }
   | { type: 'SET_ACTIVE_VIEW'; payload: AppState['activeView'] }
   | { type: 'SET_ACTIVE_SCENE'; payload: string | null }
   | { type: 'TOGGLE_SIDEBAR' }
@@ -27,7 +29,11 @@ type Action =
   | { type: 'SET_SAVE_ERROR'; payload: string | null }
   | { type: 'SET_LAST_SAVED'; payload: number }
   | { type: 'SHOW_NOTIFICATION'; payload: Omit<AppNotification, 'id'> }
-  | { type: 'CLEAR_NOTIFICATION'; payload: string };
+  | { type: 'CLEAR_NOTIFICATION'; payload: string }
+  | { type: 'SET_INFOGRAPHIC_MODE'; payload: boolean }
+  | { type: 'ADD_BEATS'; payload: { sceneId: string; beats: import('./types').Beat[] } }
+  | { type: 'UPDATE_BEAT_CONTENT'; payload: { sceneId: string; beatId: string; content: string } }
+  | { type: 'DELETE_BEAT'; payload: { sceneId: string; beatId: string } };
 
 const generateId = () => crypto.randomUUID();
 
@@ -51,9 +57,11 @@ const initialChapter: Chapter = {
 const initialState: AppState = {
   project: {
     id: generateId(),
-    title: 'Untitled Project',
+    title: 'Liturgies of Lead',
     chapters: [initialChapter],
   },
+  pastProjects: [],
+  futureProjects: [],
   snapshots: [],
   snippets: [],
   stagingItems: [],
@@ -68,14 +76,17 @@ const initialState: AppState = {
   activeView: 'editor',
   isSidebarOpen: true,
   isRightPanelOpen: false,
+  isInfographicMode: false,
   saveError: null,
   lastSaved: null,
 };
 
-const reducer = (state: AppState, action: Action): AppState => {
+const baseReducer = (state: AppState, action: Action): AppState => {
   switch (action.type) {
     case 'LOAD_STATE':
-      return { ...initialState, ...action.payload };
+      return { ...initialState, ...action.payload, isInfographicMode: false }; // always reset on load
+    case 'SET_INFOGRAPHIC_MODE':
+      return { ...state, isInfographicMode: action.payload };
     case 'SET_ACTIVE_VIEW':
       return { ...state, activeView: action.payload };
     case 'SET_ACTIVE_SCENE':
@@ -95,6 +106,44 @@ const reducer = (state: AppState, action: Action): AppState => {
         scenes: chapter.scenes.map((scene) =>
           scene.id === id ? { ...scene, content } : scene
         ),
+      }));
+      return { ...state, project: { ...state.project, chapters: newChapters } };
+    }
+    case 'ADD_BEATS': {
+      const { sceneId, beats } = action.payload;
+      const newChapters = state.project.chapters.map((chapter) => ({
+        ...chapter,
+        scenes: chapter.scenes.map((scene) =>
+          scene.id === sceneId ? { ...scene, beats: [...(scene.beats || []), ...beats] } : scene
+        ),
+      }));
+      return { ...state, project: { ...state.project, chapters: newChapters } };
+    }
+    case 'UPDATE_BEAT_CONTENT': {
+      const { sceneId, beatId, content } = action.payload;
+      const newChapters = state.project.chapters.map((chapter) => ({
+        ...chapter,
+        scenes: chapter.scenes.map((scene) => {
+          if (scene.id !== sceneId || !scene.beats) return scene;
+          return {
+            ...scene,
+            beats: scene.beats.map(b => b.id === beatId ? { ...b, content } : b)
+          };
+        }),
+      }));
+      return { ...state, project: { ...state.project, chapters: newChapters } };
+    }
+    case 'DELETE_BEAT': {
+      const { sceneId, beatId } = action.payload;
+      const newChapters = state.project.chapters.map((chapter) => ({
+        ...chapter,
+        scenes: chapter.scenes.map((scene) => {
+          if (scene.id !== sceneId || !scene.beats) return scene;
+          return {
+             ...scene,
+             beats: scene.beats.filter(b => b.id !== beatId)
+          };
+        }),
       }));
       return { ...state, project: { ...state.project, chapters: newChapters } };
     }
@@ -198,6 +247,67 @@ const reducer = (state: AppState, action: Action): AppState => {
   }
 };
 
+let lastContentUpdateTime = 0;
+
+const reducer = (state: AppState, action: Action): AppState => {
+  if (action.type === 'UNDO') {
+    if (state.pastProjects.length === 0) return state;
+    const previous = state.pastProjects[state.pastProjects.length - 1];
+    const newPast = state.pastProjects.slice(0, -1);
+    return {
+      ...state,
+      pastProjects: newPast,
+      futureProjects: [state.project, ...state.futureProjects],
+      project: previous
+    };
+  }
+  
+  if (action.type === 'REDO') {
+    if (state.futureProjects.length === 0) return state;
+    const next = state.futureProjects[0];
+    const newFuture = state.futureProjects.slice(1);
+    return {
+      ...state,
+      pastProjects: [...state.pastProjects, state.project].slice(-50),
+      futureProjects: newFuture,
+      project: next
+    };
+  }
+
+  const newState = baseReducer(state, action);
+  
+  if (newState.project !== state.project) {
+    if (action.type === 'LOAD_STATE') {
+      return { ...newState, pastProjects: [], futureProjects: [] };
+    }
+    
+    const now = Date.now();
+    let shouldPushHistory = true;
+
+    if (action.type === 'UPDATE_SCENE_CONTENT') {
+      if (now - lastContentUpdateTime < 2000) {
+        shouldPushHistory = false;
+      }
+      lastContentUpdateTime = now;
+    } else {
+       lastContentUpdateTime = now;
+    }
+
+    if (shouldPushHistory) {
+      const newPast = [...state.pastProjects, state.project].slice(-50);
+      return {
+        ...newState,
+        pastProjects: newPast,
+        futureProjects: []
+      };
+    } else {
+      return newState;
+    }
+  }
+
+  return newState;
+};
+
 const AppContext = createContext<{
   state: AppState;
   dispatch: React.Dispatch<Action>;
@@ -242,6 +352,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // Strip out transient state before saving
         const stateToSave = { ...state };
         delete stateToSave.saveError;
+        delete (stateToSave as any).pastProjects;
+        delete (stateToSave as any).futureProjects;
         
         localStorage.setItem('novellum-state', JSON.stringify(stateToSave));
         dispatch({ type: 'SET_SAVE_ERROR', payload: null });

@@ -8,9 +8,12 @@ import { StagingShelf } from './StagingShelf';
 import { Settings } from './Settings';
 import { RightPanel } from './RightPanel';
 import { SnapshotsModal } from './SnapshotsModal';
-import { PenTool, LayoutGrid, Archive, Layers, Settings as SettingsIcon, Menu, PanelRight, Clock } from 'lucide-react';
+import { ManuscriptView } from './ManuscriptView';
+import { PenTool, LayoutGrid, Archive, Layers, MessageSquare, Settings as SettingsIcon, Menu, PanelRight, Clock, X, BookOpen } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { NotebookGraphic } from './Graphics';
+import { toPng } from 'html-to-image';
+import { motion, AnimatePresence } from 'motion/react';
 
 export const Layout: React.FC = () => {
   const { state, dispatch } = useAppStore();
@@ -18,15 +21,54 @@ export const Layout: React.FC = () => {
 
   // Auto-close sidebars on initial load for smaller screens
   useEffect(() => {
-    if (window.innerWidth < 1280) {
+    if (window.innerWidth < 768) {
       dispatch({ type: 'SET_SIDEBAR_OPEN', payload: false });
+    }
+    if (window.innerWidth < 1024) {
       dispatch({ type: 'SET_RIGHT_PANEL_OPEN', payload: false });
     }
   }, [dispatch]);
 
-  // Auto-clear notifications
+  // Handle Infographic capture once state flips
   useEffect(() => {
-    if (state.notification) {
+    if (state.isInfographicMode) {
+      const captureGraphic = async () => {
+        // Wait a tick for the UI to settle and re-render badges/legend
+        await new Promise(r => setTimeout(r, 800));
+        
+        const element = document.getElementById('infographic-capture-root');
+        if (element) {
+          try {
+            const dataUrl = await toPng(element, {
+              backgroundColor: '#121214', // Match bg-main
+              pixelRatio: 2, // High-res
+              filter: (node) => node.id !== 'infographic-close-btn'
+            });
+            
+            // Trigger download
+            const link = document.createElement('a');
+            link.download = 'novellum-features-guide.png';
+            link.href = dataUrl;
+            link.click();
+            dispatch({ type: 'SHOW_NOTIFICATION', payload: { message: 'Infographic downloaded successfully!', type: 'success' } });
+            
+            // Note: We don't auto-close the mode here so the user can look at the badges 
+            // if they want. They click the 'Close' button to exit.
+          } catch (e: any) {
+            console.error("Capture failed", e);
+            dispatch({ type: 'SHOW_NOTIFICATION', payload: { message: `Click 'X' to dismiss. Graphic Error: ${e.message || String(e)}`, type: 'error' } });
+            dispatch({ type: 'SET_INFOGRAPHIC_MODE', payload: false });
+          }
+        }
+      };
+      
+      captureGraphic();
+    }
+  }, [state.isInfographicMode, dispatch]);
+
+  // Auto-clear notifications (ONLY for non-errors now!)
+  useEffect(() => {
+    if (state.notification && state.notification.type !== 'error') {
       const id = state.notification.id;
       const timer = setTimeout(() => {
         dispatch({ type: 'CLEAR_NOTIFICATION', payload: id });
@@ -36,46 +78,54 @@ export const Layout: React.FC = () => {
   }, [state.notification, dispatch]);
 
   const renderActiveView = () => {
+    let content = null;
     switch (state.activeView) {
       case 'editor':
-        return <Editor />;
+        content = <Editor />;
+        break;
       case 'cards':
-        return <SceneCards />;
+        content = <SceneCards />;
+        break;
       case 'vault':
-        return <SnippetVault />;
+        content = <SnippetVault />;
+        break;
       case 'staging':
-        return <StagingShelf />;
+        content = <StagingShelf />;
+        break;
       case 'settings':
-        return <Settings />;
+        content = <Settings />;
+        break;
+      case 'manuscript':
+        content = <ManuscriptView />;
+        break;
       default:
-        return <Editor />;
+        content = <Editor />;
     }
+
+    return (
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={state.activeView}
+          initial={{ opacity: 0, scale: 0.98, y: 10 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 1.02, y: -10 }}
+          transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+          className="absolute inset-0"
+        >
+          {content}
+        </motion.div>
+      </AnimatePresence>
+    );
   };
 
   return (
-    <div className="flex h-screen w-full bg-bg-main text-text-muted overflow-hidden font-sans selection:bg-[var(--accent-primary)]/30">
-      {/* Left Sidebar */}
-      <div className={cn(
-        "fixed inset-y-0 left-0 z-50 flex-shrink-0 transform transition-all duration-300 ease-in-out xl:relative",
-        state.isSidebarOpen ? "translate-x-0 w-72" : "-translate-x-full w-72 xl:translate-x-0 xl:w-0 xl:overflow-hidden"
-      )}>
-        <div className="w-72 h-full">
-          <Sidebar />
-        </div>
-      </div>
-
-      {/* Mobile Overlay for Sidebar */}
-      {state.isSidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black/60 z-40 xl:hidden backdrop-blur-sm transition-opacity"
-          onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
-        />
+    <div 
+      className={cn("flex flex-col w-full bg-bg-main text-text-muted overflow-hidden font-sans selection:bg-[var(--accent-primary)]/30",
+        state.isInfographicMode ? "min-h-0 h-auto" : "h-screen"
       )}
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden relative min-w-0">
-        {/* Top Navigation Bar */}
-        <header className="h-16 md:h-20 bg-bg-main flex items-center justify-between px-3 md:px-6 shrink-0 z-10 border-b border-[rgba(255,255,255,0.05)] gap-2 md:gap-4">
+      id="infographic-capture-root"
+    >
+      <header className="h-16 md:h-20 bg-bg-main flex items-center justify-between px-3 md:px-6 shrink-0 z-50 border-b border-[rgba(255,255,255,0.05)] gap-2 md:gap-4 relative w-full">
           
           {/* Left: Menu & Logo */}
           <div className="flex items-center gap-2 md:gap-3 shrink-0">
@@ -163,7 +213,7 @@ export const Layout: React.FC = () => {
                 active={state.activeView === 'editor'}
                 onClick={() => {
                   dispatch({ type: 'SET_ACTIVE_VIEW', payload: 'editor' });
-                  if (window.innerWidth < 1280 && state.isSidebarOpen) dispatch({ type: 'TOGGLE_SIDEBAR' });
+                  if (window.innerWidth < 768 && state.isSidebarOpen) dispatch({ type: 'TOGGLE_SIDEBAR' });
                 }}
                 icon={<PenTool size={16} />}
                 label="Editor"
@@ -172,7 +222,7 @@ export const Layout: React.FC = () => {
                 active={state.activeView === 'cards'}
                 onClick={() => {
                   dispatch({ type: 'SET_ACTIVE_VIEW', payload: state.activeView === 'cards' ? 'editor' : 'cards' });
-                  if (window.innerWidth < 1280 && state.isSidebarOpen) dispatch({ type: 'TOGGLE_SIDEBAR' });
+                  if (window.innerWidth < 768 && state.isSidebarOpen) dispatch({ type: 'TOGGLE_SIDEBAR' });
                 }}
                 icon={<LayoutGrid size={16} />}
                 label="Cards"
@@ -181,7 +231,7 @@ export const Layout: React.FC = () => {
                 active={state.activeView === 'vault'}
                 onClick={() => {
                   dispatch({ type: 'SET_ACTIVE_VIEW', payload: state.activeView === 'vault' ? 'editor' : 'vault' });
-                  if (window.innerWidth < 1280 && state.isSidebarOpen) dispatch({ type: 'TOGGLE_SIDEBAR' });
+                  if (window.innerWidth < 768 && state.isSidebarOpen) dispatch({ type: 'TOGGLE_SIDEBAR' });
                 }}
                 icon={<Archive size={16} />}
                 label="Vault"
@@ -190,10 +240,19 @@ export const Layout: React.FC = () => {
                 active={state.activeView === 'staging'}
                 onClick={() => {
                   dispatch({ type: 'SET_ACTIVE_VIEW', payload: state.activeView === 'staging' ? 'editor' : 'staging' });
-                  if (window.innerWidth < 1280 && state.isSidebarOpen) dispatch({ type: 'TOGGLE_SIDEBAR' });
+                  if (window.innerWidth < 768 && state.isSidebarOpen) dispatch({ type: 'TOGGLE_SIDEBAR' });
                 }}
-                icon={<Layers size={16} />}
-                label="Staging"
+                icon={<MessageSquare size={16} />}
+                label="Library"
+              />
+              <NavButton
+                active={state.activeView === 'manuscript'}
+                onClick={() => {
+                  dispatch({ type: 'SET_ACTIVE_VIEW', payload: state.activeView === 'manuscript' ? 'editor' : 'manuscript' });
+                  if (window.innerWidth < 768 && state.isSidebarOpen) dispatch({ type: 'TOGGLE_SIDEBAR' });
+                }}
+                icon={<BookOpen size={16} />}
+                label="Manuscript"
               />
             </nav>
           </div>
@@ -210,7 +269,7 @@ export const Layout: React.FC = () => {
             <button
               onClick={() => {
                 dispatch({ type: 'SET_ACTIVE_VIEW', payload: state.activeView === 'settings' ? 'editor' : 'settings' });
-                if (window.innerWidth < 1280 && state.isSidebarOpen) dispatch({ type: 'TOGGLE_SIDEBAR' });
+                if (window.innerWidth < 768 && state.isSidebarOpen) dispatch({ type: 'TOGGLE_SIDEBAR' });
               }}
               className={cn(
                 "p-2 md:p-2.5 rounded-xl transition-all active:scale-95",
@@ -231,6 +290,27 @@ export const Layout: React.FC = () => {
           </div>
         </header>
 
+      <div className="flex flex-1 relative min-h-0 overflow-hidden">
+      {/* Left Sidebar */}
+      <div className={cn(
+        "absolute inset-y-0 left-0 z-40 flex-shrink-0 transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] md:relative bg-bg-main overflow-hidden",
+        state.isSidebarOpen ? "translate-x-0 w-64 border-r border-[rgba(255,255,255,0.05)]" : "-translate-x-full w-64 md:translate-x-0 md:w-0 md:border-r-0"
+      )}>
+        <div className="w-64 h-full">
+          <Sidebar />
+        </div>
+      </div>
+
+      {/* Mobile Overlay for Sidebar */}
+      {state.isSidebarOpen && (
+        <div 
+          className="absolute inset-0 bg-black/60 z-30 md:hidden backdrop-blur-sm transition-opacity"
+          onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
+        />
+      )}
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden relative min-w-0 bg-bg-main">
         {/* Active View Container */}
         <main className="flex-1 overflow-hidden relative bg-bg-main">
           {renderActiveView()}
@@ -239,8 +319,8 @@ export const Layout: React.FC = () => {
 
       {/* Right Panel */}
       <div className={cn(
-        "fixed inset-y-0 right-0 z-50 flex-shrink-0 transform transition-all duration-300 ease-in-out xl:relative",
-        state.isRightPanelOpen ? "translate-x-0 w-80 md:w-96" : "translate-x-full w-80 md:w-96 xl:translate-x-0 xl:w-0 xl:overflow-hidden"
+        "absolute inset-y-0 right-0 z-40 flex-shrink-0 transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] lg:relative bg-bg-main overflow-hidden",
+        state.isRightPanelOpen ? "translate-x-0 w-80 md:w-96 border-l border-[rgba(255,255,255,0.05)]" : "translate-x-full w-80 md:w-96 lg:translate-x-0 lg:w-0 lg:border-l-0"
       )}>
         <div className="w-80 md:w-96 h-full">
           <RightPanel />
@@ -250,7 +330,7 @@ export const Layout: React.FC = () => {
       {/* Mobile Overlay for Right Panel */}
       {state.isRightPanelOpen && (
         <div 
-          className="fixed inset-0 bg-black/60 z-40 xl:hidden backdrop-blur-sm transition-opacity"
+          className="fixed inset-0 bg-black/60 z-40 lg:hidden backdrop-blur-sm transition-opacity"
           onClick={() => dispatch({ type: 'TOGGLE_RIGHT_PANEL' })}
         />
       )}
@@ -270,6 +350,59 @@ export const Layout: React.FC = () => {
             "bg-bg-panel border-[rgba(255,255,255,0.1)] text-white"
           )}>
             {state.notification.message}
+            {state.notification.type === 'error' && (
+              <button 
+                onClick={() => dispatch({ type: 'CLEAR_NOTIFICATION', payload: state.notification!.id })}
+                className="ml-2 hover:bg-white/10 p-1 rounded transition-colors"
+                title="Dismiss"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      </div>
+
+      {/* Infographic Legend Overlay */}
+      {state.isInfographicMode && (
+        <div className="w-full bg-bg-panel border-t border-[rgba(255,255,255,0.05)] p-6 md:p-8 shrink-0 relative">
+          <button 
+            id="infographic-close-btn"
+            onClick={() => dispatch({ type: 'SET_INFOGRAPHIC_MODE', payload: false })}
+            className="absolute top-4 right-4 p-2 bg-red-500/20 text-red-400 hover:bg-red-500 hover:text-white rounded-full transition-colors z-[999]"
+            title="Exit Graphic Mode"
+          >
+            <X size={20} />
+          </button>
+          <div className="max-w-5xl mx-auto flex flex-col items-center">
+            <h2 className="text-2xl font-bold text-white tracking-widest uppercase mb-8 flex items-center gap-3">
+              <NotebookGraphic className="w-8 h-8" /> 
+              Novellum Feature Guide
+            </h2>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
+              {[
+                { n: 1, title: 'Manuscript Navigator', desc: 'Seamlessly organize your novel into chapters and individual scenes.' },
+                { n: 2, title: 'Distraction-Free Editor', desc: 'A minimalist writing zone that auto-saves as you type without getting in your way.' },
+                { n: 3, title: 'Clean Text Magic', desc: 'Instantly normalize messy punctuation, spacing, capitalization, and strip structural tags.' },
+                { n: 4, title: 'Quick Copy Mode', desc: 'Tap any sentence to instantly copy it. Press and hold to instantly copy a full paragraph.' },
+                { n: 5, title: 'Split Screen Viewer', desc: 'Pin any Vault lore snippet or previous scene as a read-only reference right beside your active draft.' }
+              ].map(feat => (
+                <div key={feat.n} className="flex gap-4 p-4 rounded-2xl bg-bg-card border border-[rgba(255,255,255,0.03)] items-start">
+                  <div className="w-8 h-8 rounded-full bg-accent-primary text-white font-bold flex items-center justify-center shrink-0 shadow-lg">
+                    {feat.n}
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white mb-1">{feat.title}</h3>
+                    <p className="text-sm text-text-muted leading-relaxed">{feat.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-8 text-xs text-text-muted opacity-50 uppercase tracking-widest font-semibold">
+              Exported from Novellum Writer 
+            </div>
           </div>
         </div>
       )}
