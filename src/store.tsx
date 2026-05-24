@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import { AppState, Project, Chapter, Scene, Snippet, StagingItem, CleanupSettings, SceneStatus, Snapshot, AppNotification } from './types';
+import { saveSnapshotDb, deleteSnapshotDb, loadSnapshotsDb } from './utils/db';
 
 type Action =
   | { type: 'UNDO' }
@@ -23,7 +24,8 @@ type Action =
   | { type: 'UPDATE_SETTINGS'; payload: Partial<CleanupSettings> }
   | { type: 'LOAD_STATE'; payload: AppState }
   | { type: 'REORDER_SCENES'; payload: { sourceChapterId: string; destinationChapterId: string; sourceIndex: number; destinationIndex: number } }
-  | { type: 'CREATE_SNAPSHOT' }
+  | { type: 'CREATE_SNAPSHOT'; payload?: { isAuto?: boolean } }
+  | { type: 'SET_SNAPSHOTS'; payload: Snapshot[] }
   | { type: 'RESTORE_SNAPSHOT'; payload: string }
   | { type: 'DELETE_SNAPSHOT'; payload: string }
   | { type: 'SET_SAVE_ERROR'; payload: string | null }
@@ -197,13 +199,52 @@ const baseReducer = (state: AppState, action: Action): AppState => {
     case 'UPDATE_SETTINGS':
       return { ...state, settings: { ...state.settings, ...action.payload } };
     case 'CREATE_SNAPSHOT': {
+      const isAuto = action.payload?.isAuto ?? false;
+      
+      // Safety guard: If this is an auto-snapshot, and the project has been emptied,
+      // but we have existing snapshots containing real content, DO NOT take a snapshot or prune older snapshots!
+      const currentProjectWordCount = state.project.chapters.reduce((acc, c) => 
+        acc + c.scenes.reduce((sAcc, s) => {
+          const mainLength = s.content?.length || 0;
+          const beatLength = s.beats?.reduce((bAcc, b) => bAcc + (b.content?.length || 0), 0) || 0;
+          return sAcc + mainLength + beatLength;
+        }, 0)
+      , 0);
+
+      // If project has less than 50 characters, and we already have snapshots, check if they had content.
+      if (isAuto && currentProjectWordCount < 50 && state.snapshots.length > 0) {
+        // Find if any existing snapshot has substantial content
+        const hasSubstantialSnapshot = state.snapshots.some(snap => {
+          const snapCount = snap.project.chapters.reduce((acc, c) => 
+            acc + c.scenes.reduce((sAcc, s) => {
+              const mainLength = s.content?.length || 0;
+              const beatLength = s.beats?.reduce((bAcc, b) => bAcc + (b.content?.length || 0), 0) || 0;
+              return sAcc + mainLength + beatLength;
+            }, 0)
+          , 0);
+          return snapCount > 100;
+        });
+        
+        if (hasSubstantialSnapshot) {
+          console.log("Refusing to take a blank automatic snapshot over existing substantial history!");
+          return state; // No-op, preserve historical data!
+        }
+      }
+
       const newSnapshot: Snapshot = {
         id: generateId(),
         timestamp: Date.now(),
         project: JSON.parse(JSON.stringify(state.project)), // Deep copy
       };
-      return { ...state, snapshots: [newSnapshot, ...state.snapshots] };
+      
+      // Auto-prune old auto-snapshots (keep max 60 total snapshots now with IndexedDB storage)
+      return { 
+        ...state, 
+        snapshots: [newSnapshot, ...state.snapshots].slice(0, 60) 
+      };
     }
+    case 'SET_SNAPSHOTS':
+      return { ...state, snapshots: action.payload };
     case 'RESTORE_SNAPSHOT': {
       const snapshot = state.snapshots.find(s => s.id === action.payload);
       if (!snapshot) return state;
@@ -247,7 +288,7 @@ const baseReducer = (state: AppState, action: Action): AppState => {
   }
 };
 
-let lastContentUpdateTime = 0;
+let lastHistoryPushTime = 0;
 
 const reducer = (state: AppState, action: Action): AppState => {
   if (action.type === 'UNDO') {
@@ -284,13 +325,14 @@ const reducer = (state: AppState, action: Action): AppState => {
     const now = Date.now();
     let shouldPushHistory = true;
 
-    if (action.type === 'UPDATE_SCENE_CONTENT') {
-      if (now - lastContentUpdateTime < 2000) {
+    if (action.type === 'UPDATE_SCENE_CONTENT' || action.type === 'UPDATE_BEAT_CONTENT') {
+      if (now - lastHistoryPushTime < 2000) {
         shouldPushHistory = false;
+      } else {
+        lastHistoryPushTime = now;
       }
-      lastContentUpdateTime = now;
     } else {
-       lastContentUpdateTime = now;
+       lastHistoryPushTime = now;
     }
 
     if (shouldPushHistory) {
@@ -315,10 +357,13 @@ const AppContext = createContext<{
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [isLoaded, setIsLoaded] = React.useState(false);
+  const lastSnapshotsRef = React.useRef<Snapshot[]>([]);
 
   // Load state on mount
   useEffect(() => {
     let saved = localStorage.getItem('novellum-state');
+    let legacySnapshots: Snapshot[] = [];
     
     // Migration from old app name
     if (!saved) {
@@ -331,22 +376,118 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
+        // Expose legacy snapshots so we can migrate them to IndexedDB
+        if (parsed.snapshots && Array.isArray(parsed.snapshots)) {
+          legacySnapshots = parsed.snapshots;
+        }
         // Don't load transient state like save errors
         delete parsed.saveError;
+        // Don't put snapshots in state yet; we'll merge them from DB
+        parsed.snapshots = [];
         dispatch({ type: 'LOAD_STATE', payload: parsed });
       } catch (e) {
         console.error('Failed to load state', e);
       }
     }
+    
+    // Load and migrate snapshots to IndexedDB
+    const loadAndMigrateDb = async () => {
+      try {
+        const dbSnaps = await loadSnapshotsDb();
+        const merged = [...dbSnaps];
+        
+        let migratedAny = false;
+        for (const legacySnap of legacySnapshots) {
+          if (!merged.some(m => m.id === legacySnap.id)) {
+            merged.push(legacySnap);
+            await saveSnapshotDb(legacySnap);
+            migratedAny = true;
+          }
+        }
+        
+        // Sort newest first
+        merged.sort((a, b) => b.timestamp - a.timestamp);
+        
+        dispatch({ type: 'SET_SNAPSHOTS', payload: merged });
+        lastSnapshotsRef.current = merged;
+        
+        if (migratedAny && saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            delete parsed.snapshots;
+            localStorage.setItem('novellum-state', JSON.stringify(parsed));
+          } catch (e) {
+            console.error('Failed to clean legacy snapshots from localStorage', e);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to initialize snapshots database', err);
+      } finally {
+        setIsLoaded(true);
+      }
+    };
+    
+    loadAndMigrateDb();
   }, []);
+
+  // Sync snapshots to IndexedDB
+  useEffect(() => {
+    if (!isLoaded) return;
+    
+    const prevSnaps = lastSnapshotsRef.current;
+    const currentSnaps = state.snapshots;
+    
+    const added = currentSnaps.filter(s => !prevSnaps.some(p => p.id === s.id));
+    const deleted = prevSnaps.filter(p => !currentSnaps.some(s => s.id === p.id));
+    
+    added.forEach(async (snap) => {
+      try {
+        await saveSnapshotDb(snap);
+      } catch (err) {
+        console.error('Failed to save snapshot to IndexedDB', err);
+      }
+    });
+
+    deleted.forEach(async (snap) => {
+      try {
+        await deleteSnapshotDb(snap.id);
+      } catch (err) {
+        console.error('Failed to delete snapshot from IndexedDB', err);
+      }
+    });
+
+    lastSnapshotsRef.current = currentSnaps;
+  }, [state.snapshots, isLoaded]);
 
   // Apply theme
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', state.settings.theme || 'ignite');
   }, [state.settings.theme]);
 
+  // Auto-snapshot
+  useEffect(() => {
+    if (!isLoaded) return;
+
+    // Take an initial backup 5 seconds after load to ensure they have a session restore point
+    const initialTimeout = setTimeout(() => {
+      dispatch({ type: 'CREATE_SNAPSHOT', payload: { isAuto: true } });
+    }, 5000);
+
+    // Take a snapshot every 10 minutes
+    const intervalId = setInterval(() => {
+      dispatch({ type: 'CREATE_SNAPSHOT', payload: { isAuto: true } });
+    }, 10 * 60 * 1000);
+
+    return () => {
+      clearTimeout(initialTimeout);
+      clearInterval(intervalId);
+    };
+  }, [isLoaded]);
+
   // Debounced save
   useEffect(() => {
+    if (!isLoaded) return;
+
     const saveState = () => {
       try {
         // Strip out transient state before saving
@@ -354,6 +495,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         delete stateToSave.saveError;
         delete (stateToSave as any).pastProjects;
         delete (stateToSave as any).futureProjects;
+        delete (stateToSave as any).snapshots; // Exclude from localStorage completely!
         
         localStorage.setItem('novellum-state', JSON.stringify(stateToSave));
         dispatch({ type: 'SET_SAVE_ERROR', payload: null });
@@ -373,7 +515,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const timeoutId = setTimeout(saveState, 1000); // 1 second debounce
     return () => clearTimeout(timeoutId);
-  }, [state.project, state.snapshots, state.snippets, state.stagingItems, state.settings]);
+  }, [isLoaded, state.project, state.snippets, state.stagingItems, state.settings]);
 
   return <AppContext.Provider value={{ state, dispatch }}>{children}</AppContext.Provider>;
 };

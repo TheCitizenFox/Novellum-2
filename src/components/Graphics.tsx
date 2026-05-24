@@ -17,7 +17,7 @@ export const NotebookGraphic = ({ className = "w-24 h-24" }: { className?: strin
     <rect x="42" y="54" width="16" height="4" rx="2" fill="rgba(0,0,0,0.25)" />
     
     {/* Binding Rings */}
-    <rect x="14" y="24" width="12" height="6" rx="3" fill="#FCD34D" shadow="0 2px 4px rgba(0,0,0,0.2)" />
+    <rect x="14" y="24" width="12" height="6" rx="3" fill="#FCD34D" />
     <rect x="14" y="36" width="12" height="6" rx="3" fill="#FCD34D" />
     <rect x="14" y="48" width="12" height="6" rx="3" fill="#FCD34D" />
     <rect x="14" y="60" width="12" height="6" rx="3" fill="#FCD34D" />

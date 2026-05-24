@@ -4,6 +4,7 @@ import { Copy, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../utils/cn';
 import { format } from 'date-fns';
+import Markdown from 'react-markdown';
 
 export const ManuscriptView: React.FC = () => {
   const { state } = useAppStore();
@@ -106,29 +107,9 @@ export const ManuscriptView: React.FC = () => {
                         return (
                         <div key={scene.id} className="text-text-main leading-relaxed">
                           {combinedContent ? (
-                            combinedContent.split('\n').map((paragraph, i) => {
-                              const isFirstParagraph = sceneIndex === 0 && i === 0 && paragraph.trim().length > 0;
-                              return (
-                                <p 
-                                  key={i} 
-                                  className="mb-4 text-lg font-light text-text-main opacity-70 tracking-[0.01em] leading-[1.8]"
-                                  style={{
-                                    textIndent: (i === 0) ? '0' : '2rem', // Classic book indent
-                                  }}
-                                >
-                                  {isFirstParagraph && paragraph.trim().length > 0 ? (
-                                    <>
-                                      <span className="drop-cap-text float-left text-[5rem] pr-3 font-light leading-[0.75]" style={{ color: 'var(--accent-primary)', marginTop: '0.2em' }}>
-                                        {paragraph.trim().charAt(0)}
-                                      </span>
-                                      {paragraph.trim().slice(1) || '\u00A0'}
-                                    </>
-                                  ) : (
-                                    paragraph.trim() || '\u00A0'
-                                  )}
-                                </p>
-                              );
-                            })
+                            <div className={cn("manuscript-content", sceneIndex === 0 && "manuscript-first-scene")}>
+                              <Markdown>{combinedContent}</Markdown>
+                            </div>
                           ) : (
                             <p className="text-center text-text-muted opacity-30 italic text-sm">
                               [Scene {sceneIndex + 1} is empty]

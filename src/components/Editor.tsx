@@ -6,6 +6,8 @@ import { NotebookGraphic } from './Graphics';
 import { cn } from '../utils/cn';
 import { FeatureBadge } from './FeatureBadge';
 import { motion, AnimatePresence } from 'motion/react';
+import { RichTextEditor, RichTextEditorRef } from './RichTextEditor';
+import Markdown from 'react-markdown';
 
 const findSentenceAt = (text: string, pos: number) => {
   if (!text) return { start: 0, end: 0 };
@@ -48,43 +50,11 @@ const findParagraphAt = (text: string, pos: number) => {
   return { start, end };
 };
 
-const AutoResizeTextarea: React.FC<{
-  value: string;
-  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-  placeholder?: string;
-  className?: string;
-  onPointerDown?: React.PointerEventHandler<HTMLTextAreaElement>;
-  onPointerUp?: React.PointerEventHandler<HTMLTextAreaElement>;
-  readOnly?: boolean;
-}> = ({ value, onChange, placeholder, className, onPointerDown, onPointerUp, readOnly }) => {
-  const ref = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    if (ref.current) {
-      ref.current.style.height = 'auto';
-      ref.current.style.height = ref.current.scrollHeight + 'px';
-    }
-  }, [value]);
-
-  return (
-    <textarea
-      ref={ref}
-      value={value}
-      onChange={onChange}
-      onPointerDown={onPointerDown}
-      onPointerUp={onPointerUp}
-      placeholder={placeholder}
-      readOnly={readOnly}
-      spellCheck={false}
-      className={cn("overflow-hidden block relative -ml-1 pl-1", className)}
-      style={{ minHeight: '60px' }}
-    />
-  );
-};
 
 export const Editor: React.FC = () => {
   const { state, dispatch } = useAppStore();
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const activeEditorRef = useRef<any>(null);
   
   const allChapters = state.project.chapters;
   const allSnippets = state.snippets;
@@ -141,6 +111,13 @@ export const Editor: React.FC = () => {
     setCleanupStats(null);
     if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
   }, [activeScene?.id]);
+
+  // Sync content state when parent activeScene.content changes externally (e.g. Undo/Redo/Clean)
+  useEffect(() => {
+    if (activeScene && activeScene.content !== content) {
+      setContent(activeScene.content);
+    }
+  }, [activeScene?.content]);
 
   // Auto-select reference
   useEffect(() => {
@@ -202,72 +179,15 @@ export const Editor: React.FC = () => {
   }, [isQuickCopy]);
 
   const executeCopy = (start: number, end: number, label: string) => {
-    if (!textareaRef.current) return;
-    const text = content.substring(start, end).trim();
-    if (!text) return;
-    
-    textareaRef.current.focus(); // required for iOS visual highlight
-    textareaRef.current.setSelectionRange(start, end);
-    quickCopyRef.current.anchorPos = start;
-    quickCopyRef.current.endPos = end;
-    
-    navigator.clipboard.writeText(text).then(() => {
-      setCopyToast(`Copied ${label}`);
-      if (copyToastTimeout.current) clearTimeout(copyToastTimeout.current);
-      copyToastTimeout.current = window.setTimeout(() => setCopyToast(null), 2000);
-    }).catch(e => {
-      console.error("Clipboard failure", e);
-      setCopyToast(`Selected ${label} (Copy blocked)`);
-      if (copyToastTimeout.current) clearTimeout(copyToastTimeout.current);
-      copyToastTimeout.current = window.setTimeout(() => setCopyToast(null), 2000);
-    });
+    // Disabled Native Quick Copy due to RTE
   };
 
-  const handlePointerDown = (e: React.PointerEvent<HTMLTextAreaElement>) => {
-    if (!isQuickCopy) return;
-    const ref = quickCopyRef.current;
-    ref.startX = e.clientX;
-    ref.startY = e.clientY;
-    ref.held = false;
-    
-    if (ref.holdTimer) clearTimeout(ref.holdTimer);
-    ref.holdTimer = window.setTimeout(() => {
-      ref.held = true;
-      if (!textareaRef.current) return;
-      const pos = textareaRef.current.selectionStart;
-      const bounds = findParagraphAt(content, pos);
-      executeCopy(bounds.start, bounds.end, 'Paragraph');
-    }, 500);
+  const handlePointerDown = (e: React.PointerEvent<HTMLElement>) => {
+    // Disabled Native Quick Copy due to RTE
   };
 
-  const handlePointerUp = (e: React.PointerEvent<HTMLTextAreaElement>) => {
-    if (!isQuickCopy) return;
-    const ref = quickCopyRef.current;
-    if (ref.holdTimer) clearTimeout(ref.holdTimer);
-    
-    if (ref.held) return;
-    if (Math.hypot(e.clientX - ref.startX, e.clientY - ref.startY) > 10) return; // Dragged
-
-    // It's a tap. Wait slightly for browser to update selectionStart
-    setTimeout(() => {
-      if (!textareaRef.current) return;
-      const pos = textareaRef.current.selectionStart;
-      
-      // Successive tap?
-      if (ref.anchorPos !== -1 && pos >= ref.anchorPos && pos <= ref.endPos + 1) {
-        // find next sentence
-        let scanPos = ref.endPos;
-        while (scanPos < content.length && /\s/.test(content[scanPos])) scanPos++;
-        if (scanPos < content.length) {
-          const bounds = findSentenceAt(content, scanPos);
-          executeCopy(ref.anchorPos, bounds.end, 'Multiple Sentences');
-        }
-      } else {
-        // new tap
-        const bounds = findSentenceAt(content, pos);
-        executeCopy(bounds.start, bounds.end, 'Sentence');
-      }
-    }, 10);
+  const handlePointerUp = (e: React.PointerEvent<HTMLElement>) => {
+    // Disabled Native Quick Copy due to RTE
   };
 
   if (!activeScene) {
@@ -344,27 +264,23 @@ export const Editor: React.FC = () => {
     }
   };
 
-  const insertFormatting = (prefix: string, suffix: string = '') => {
-    if (!textareaRef.current) return;
+  // Handle setting active editor
+  const handleEditorFocus = (editorInstance: any) => {
+    activeEditorRef.current = editorInstance;
+  };
+
+  const applyFormatting = (format: string, attrs?: any) => {
+    if (!activeEditorRef.current) return;
     
-    const textarea = textareaRef.current;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selectedText = content.substring(start, end);
+    const editor = activeEditorRef.current;
     
-    const newContent = content.substring(0, start) + prefix + selectedText + suffix + content.substring(end);
-    
-    setContent(newContent);
-    dispatch({
-      type: 'UPDATE_SCENE_CONTENT',
-      payload: { id: activeScene.id, content: newContent },
-    });
-    
-    // Restore focus and selection
-    setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(start + prefix.length, end + prefix.length);
-    }, 0);
+    switch (format) {
+      case 'bold': editor.chain().focus().toggleBold().run(); break;
+      case 'italic': editor.chain().focus().toggleItalic().run(); break;
+      case 'heading': editor.chain().focus().toggleHeading({ level: 2 }).run(); break;
+      case 'blockquote': editor.chain().focus().toggleBlockquote().run(); break;
+      case 'bulletList': editor.chain().focus().toggleBulletList().run(); break;
+    }
     
     if (showUndo) {
       setShowUndo(false);
@@ -375,7 +291,7 @@ export const Editor: React.FC = () => {
   return (
     <div className="flex-1 flex flex-col h-full bg-bg-main overflow-hidden">
       {/* Minimal Header */}
-      <div className="h-16 border-b border-[rgba(255,255,255,0.05)] flex items-center justify-between px-4 md:px-6 shrink-0 bg-bg-panel relative">
+      <div className="h-16 border-b border-[rgba(255,255,255,0.05)] flex items-center justify-between px-4 md:px-6 shrink-0 bg-bg-panel relative z-20">
         <div className="flex items-center gap-3 md:gap-4 flex-1">
           <button 
             onClick={() => dispatch({ type: 'SET_ACTIVE_VIEW', payload: 'cards' })}
@@ -409,33 +325,17 @@ export const Editor: React.FC = () => {
                 onClick={() => {
                   let textToClean;
                   let isSelection = false;
-                  
-                  if (activeScene.beats && activeScene.beats.length > 0) {
-                     // Get current selection from document if any inside one of the textareas
-                     const activeEl = document.activeElement as HTMLTextAreaElement;
-                     if (activeEl && activeEl.tagName === 'TEXTAREA' && activeEl.selectionStart !== activeEl.selectionEnd) {
-                       textToClean = activeEl.value.substring(activeEl.selectionStart, activeEl.selectionEnd);
-                       isSelection = true;
-                     }
-                  } else if (textareaRef.current && textareaRef.current.selectionStart !== textareaRef.current.selectionEnd) {
-                     textToClean = content.substring(textareaRef.current.selectionStart, textareaRef.current.selectionEnd);
-                     isSelection = true;
+                  const sel = window.getSelection();
+                  if (sel && sel.toString().trim()) {
+                    textToClean = sel.toString();
+                    isSelection = true;
                   }
 
-                  if (isSelection && textToClean) {
+                  if (isSelection && textToClean && activeEditorRef.current) {
                      const result = cleanText(textToClean, state.settings);
                      if (result.text !== textToClean) {
-                       if (activeScene.beats && activeScene.beats.length > 0) {
-                         const activeEl = document.activeElement as HTMLTextAreaElement;
-                         const updated = activeEl.value.substring(0, activeEl.selectionStart) + result.text + activeEl.value.substring(activeEl.selectionEnd);
-                         // Since we don't know easily which beat it is, we dispatch standard content change. 
-                         // To be exact we'd need to find the beat by comparing content. 
-                         // But we can just use `document.execCommand('insertText')` for selection cleans to preserve native undo buffer and react state automatically updates via `onInput`.
-                         document.execCommand('insertText', false, result.text);
-                       } else if (textareaRef.current) {
-                           textareaRef.current.setRangeText(result.text, textareaRef.current.selectionStart, textareaRef.current.selectionEnd, 'select');
-                           handleContentChange({ target: textareaRef.current } as any);
-                       }
+                       const editor = activeEditorRef.current;
+                       editor.chain().focus().insertContent(result.text).run();
                        setCleanupStats(result.stats);
                        setShowUndo(true);
                        if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
@@ -487,34 +387,24 @@ export const Editor: React.FC = () => {
       </div>
 
       {/* Formatting Toolbar */}
-      <div className="h-10 border-b border-[rgba(255,255,255,0.02)] flex items-center px-4 md:px-6 shrink-0 bg-bg-main gap-1">
-        <button onClick={() => insertFormatting('**', '**')} className="p-1.5 text-text-muted hover:text-white hover:bg-bg-panel rounded transition-colors" title="Bold">
+      <div className="h-10 border-b border-[rgba(255,255,255,0.02)] flex items-center px-4 md:px-6 shrink-0 bg-bg-main gap-1 relative z-20">
+        <button onPointerDown={(e) => { e.preventDefault(); applyFormatting('bold'); }} className="p-1.5 text-text-muted hover:text-white hover:bg-bg-panel rounded transition-colors" title="Bold">
           <Bold size={14} />
         </button>
-        <button onClick={() => insertFormatting('*', '*')} className="p-1.5 text-text-muted hover:text-white hover:bg-bg-panel rounded transition-colors" title="Italic">
+        <button onPointerDown={(e) => { e.preventDefault(); applyFormatting('italic'); }} className="p-1.5 text-text-muted hover:text-white hover:bg-bg-panel rounded transition-colors" title="Italic">
           <Italic size={14} />
         </button>
         <div className="w-px h-4 bg-[rgba(255,255,255,0.1)] mx-1" />
-        <button onClick={() => insertFormatting('## ')} className="p-1.5 text-text-muted hover:text-white hover:bg-bg-panel rounded transition-colors" title="Heading">
+        <button onPointerDown={(e) => { e.preventDefault(); applyFormatting('heading'); }} className="p-1.5 text-text-muted hover:text-white hover:bg-bg-panel rounded transition-colors" title="Heading">
           <Type size={14} />
         </button>
-        <button onClick={() => insertFormatting('> ')} className="p-1.5 text-text-muted hover:text-white hover:bg-bg-panel rounded transition-colors" title="Quote">
+        <button onPointerDown={(e) => { e.preventDefault(); applyFormatting('blockquote'); }} className="p-1.5 text-text-muted hover:text-white hover:bg-bg-panel rounded transition-colors" title="Quote">
           <Quote size={14} />
         </button>
-        <button onClick={() => insertFormatting('- ')} className="p-1.5 text-text-muted hover:text-white hover:bg-bg-panel rounded transition-colors" title="List">
+        <button onPointerDown={(e) => { e.preventDefault(); applyFormatting('bulletList'); }} className="p-1.5 text-text-muted hover:text-white hover:bg-bg-panel rounded transition-colors" title="List">
           <List size={14} />
         </button>
         <div className="w-px h-4 bg-[rgba(255,255,255,0.1)] mx-1" />
-        <div className="relative">
-          <FeatureBadge number={4} position="custom" className="-top-2 -right-2" />
-          <button 
-            onClick={() => setIsQuickCopy(!isQuickCopy)}
-            className={cn("p-1.5 rounded transition-colors", isQuickCopy ? "text-accent-primary bg-bg-panel" : "text-text-muted hover:text-white hover:bg-bg-panel")}
-            title="Quick Copy Mode (Tap: Sentence, Hold: Paragraph)"
-          >
-            <TextSelect size={14} />
-          </button>
-        </div>
         <div className="flex-1" />
         <button
           onClick={() => dispatch({ type: 'UNDO' })}
@@ -547,7 +437,7 @@ export const Editor: React.FC = () => {
       </div>
 
       {/* Split Area Container */}
-      <div className="flex-1 overflow-hidden relative flex flex-col md:flex-row" ref={containerRef}>
+      <div className="flex-1 overflow-hidden relative flex flex-col md:flex-row min-h-0 min-w-0" ref={containerRef}>
         
         {/* Left Pane (Reference) */}
         <AnimatePresence initial={false}>
@@ -604,9 +494,9 @@ export const Editor: React.FC = () => {
             </div>
 
             {/* Reference Body */}
-            <div className={cn("flex-1 overflow-y-auto p-4 md:p-8", !isDesktop && !mobileRefExpanded && "hidden")}>
-              <div className="text-[#f4f4f5]/60 text-sm md:text-base leading-relaxed font-sans whitespace-pre-wrap select-text selection:bg-[var(--accent-primary)]/30">
-                {refContent || 'No content found.'}
+            <div className={cn("flex-1 overflow-y-auto p-4 md:p-8 no-scrollbar", !isDesktop && !mobileRefExpanded && "hidden")}>
+              <div className="text-[#f4f4f5]/60 text-sm md:text-base leading-relaxed font-sans select-text selection:bg-[var(--accent-primary)]/30 prose prose-invert prose-p:leading-relaxed prose-p:mb-4 max-w-none">
+                {refContent ? <Markdown>{refContent}</Markdown> : 'No content found.'}
               </div>
             </div>
           </motion.div>
@@ -622,7 +512,7 @@ export const Editor: React.FC = () => {
         )}
         
         {/* Right Pane (Live Editor) */}
-        <div className="flex-1 overflow-hidden relative bg-bg-main shrink-0 group/editorpane">
+        <div className="flex-1 overflow-hidden relative bg-bg-main shrink-0 group/editorpane min-h-0 min-w-0">
           <FeatureBadge number={2} position="custom" className="top-8 right-8" />
           {copyToast && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-accent-primary text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg pointer-events-none animate-in fade-in slide-in-from-top-2">
@@ -631,65 +521,84 @@ export const Editor: React.FC = () => {
           )}
           <div className="max-w-4xl mx-auto h-full p-4 md:p-8 relative overflow-y-auto no-scrollbar">
             {activeScene.beats && activeScene.beats.length > 0 ? (
-              <div className="flex flex-col gap-8 pb-32">
+              <div className="flex flex-col gap-10 pb-32">
                 {activeScene.beats.map((beat, index) => (
-                  <div key={beat.id} className="relative group/beat">
-                    <div className="absolute -left-4 md:-left-8 top-0 w-1 h-full bg-transparent group-hover/beat:bg-[var(--accent-primary)]/20 transition-colors rounded-full" />
-                    <div className="mb-2 flex items-center justify-between opacity-50 group-focus-within/beat:opacity-100 group-hover/beat:opacity-100 transition-opacity">
-                      <h4 className="text-sm font-bold text-[var(--accent-primary)] tracking-wide flex items-center gap-2">
-                        <span className="w-5 h-5 rounded flex items-center justify-center bg-[var(--accent-primary)]/20 text-xs">
-                          {index + 1}
-                        </span>
-                        {beat.label}
-                      </h4>
+                  <div key={beat.id} className="relative group/beat rounded-xl transition-all duration-500 ease-out py-6 px-6 md:px-8 -mx-6 md:-mx-8">
+                    {/* Expanding semi-transparent background color block overlay */}
+                    <div className="absolute inset-0 rounded-xl transition-all duration-500 pointer-events-none opacity-0 scale-[0.97] bg-gradient-to-br from-[var(--accent-primary)]/[0.08] via-[var(--accent-primary)]/[0.03] to-transparent border border-[var(--accent-primary)]/15 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.25)] group-focus-within/beat:opacity-100 group-focus-within/beat:scale-[1.01] group-hover/beat:opacity-40 group-hover/beat:scale-[0.99] group-focus-within/beat:group-hover/beat:opacity-100 group-focus-within/beat:group-hover/beat:scale-[1.01]" style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }} />
+                    
+                    {/* Left glow indicator */}
+                    <div className="absolute left-0 top-4 bottom-4 w-1 bg-transparent group-hover/beat:bg-[var(--accent-primary)]/35 group-focus-within/beat:bg-[var(--accent-primary)] transition-all duration-500 rounded-full" />
+                    
+                    <div className="relative z-10">
+                      <div className="mb-4 flex items-center justify-between opacity-60 group-focus-within/beat:opacity-100 group-hover/beat:opacity-100 transition-opacity duration-300">
+                        <h4 className="text-sm font-bold text-[var(--accent-primary)] tracking-wide flex items-center gap-3">
+                          <span className="w-6 h-6 rounded-md flex items-center justify-center bg-[var(--accent-primary)]/10 text-xs font-mono shadow-[inset_0_0_0_1px_var(--accent-primary)] shadow-[var(--accent-primary)]/20">
+                            {index + 1}
+                          </span>
+                          <span>{beat.label}</span>
+                        </h4>
+                      </div>
+                      <div className="pl-6 border-l border-dashed border-[var(--accent-primary)]/20 group-focus-within/beat:border-transparent transition-colors duration-500 ml-3 min-h-[4rem]">
+                        <RichTextEditor
+                          key={beat.id}
+                          value={beat.content}
+                          onChange={(value) => dispatch({
+                            type: 'UPDATE_BEAT_CONTENT',
+                            payload: { sceneId: activeScene.id, beatId: beat.id, content: value }
+                          })}
+                          onFocus={(editor) => handleEditorFocus(editor)}
+                          ref={(r) => {
+                            if (r?.editor && r.editor.isFocused) {
+                              handleEditorFocus(r.editor);
+                            }
+                          }}
+                          placeholder="Flesh out this beat..."
+                          className={cn(
+                            "w-full bg-transparent text-[#f4f4f5] text-sm md:text-base leading-relaxed transition-colors",
+                          )}
+                          readOnly={isQuickCopy}
+                        />
+                      </div>
                     </div>
-                    <AutoResizeTextarea
-                      value={beat.content}
-                      onChange={(e) => dispatch({
-                        type: 'UPDATE_BEAT_CONTENT',
-                        payload: { sceneId: activeScene.id, beatId: beat.id, content: e.target.value }
-                      })}
-                      onPointerDown={handlePointerDown}
-                      onPointerUp={handlePointerUp}
-                      placeholder="Flesh out this beat..."
-                      className={cn(
-                        "w-full resize-none bg-transparent text-[#f4f4f5] text-sm md:text-base leading-relaxed focus:outline-none font-sans placeholder-[var(--text-muted)]/30 border-l-2 border-dashed border-[rgba(255,255,255,0.05)] focus:border-[var(--accent-primary)]/30 pl-4 py-2 transition-colors",
-                        isQuickCopy ? "cursor-text selection:bg-[var(--accent-primary)]/40" : ""
-                      )}
-                      readOnly={isQuickCopy}
-                    />
                   </div>
                 ))}
                 
                 <div className="mt-8 pt-8 border-t border-[rgba(255,255,255,0.05)]">
                   <h4 className="text-xs font-bold text-text-muted uppercase tracking-widest mb-4">Additional Content</h4>
-                  <AutoResizeTextarea
+                  <RichTextEditor
+                    key={activeScene.id + '_additional'}
                     value={content}
-                    onChange={handleContentChange}
-                    onPointerDown={handlePointerDown}
-                    onPointerUp={handlePointerUp}
+                    onChange={(val) => handleContentChange({ target: { value: val }} as any)}
+                    onFocus={(editor) => handleEditorFocus(editor)}
+                    ref={(r) => {
+                      if (r?.editor && r.editor.isFocused) {
+                        handleEditorFocus(r.editor);
+                      }
+                    }}
                     placeholder="Continue your scene here..."
                     className={cn(
-                      "w-full resize-none bg-transparent text-[#f4f4f5] text-sm md:text-base leading-relaxed focus:outline-none font-sans placeholder-[var(--text-muted)]/30",
-                      isQuickCopy ? "cursor-text selection:bg-[var(--accent-primary)]/40" : ""
+                      "w-full bg-transparent text-[#f4f4f5] text-sm md:text-base leading-relaxed",
                     )}
                     readOnly={isQuickCopy}
                   />
                 </div>
               </div>
             ) : (
-              <textarea
-                ref={textareaRef}
+              <RichTextEditor
+                key={activeScene.id}
                 value={content}
-                onChange={handleContentChange}
-                onPointerDown={handlePointerDown}
-                onPointerUp={handlePointerUp}
+                onChange={(val) => handleContentChange({ target: { value: val }} as any)}
+                onFocus={(editor) => handleEditorFocus(editor)}
+                ref={(r) => {
+                  if (r?.editor && r.editor.isFocused) {
+                    handleEditorFocus(r.editor);
+                  }
+                }}
                 placeholder="Start drafting your scene here..."
                 className={cn(
-                  "w-full h-full resize-none bg-transparent text-[#f4f4f5] text-sm md:text-base leading-relaxed focus:outline-none font-sans placeholder-[var(--text-muted)]/30 no-scrollbar pb-32",
-                  isQuickCopy ? "cursor-text selection:bg-[var(--accent-primary)]/40" : ""
+                  "w-full h-full bg-transparent text-[#f4f4f5] text-sm md:text-base leading-relaxed no-scrollbar pb-32",
                 )}
-                spellCheck={false}
                 readOnly={isQuickCopy}
               />
             )}

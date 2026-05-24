@@ -121,7 +121,7 @@ export const Layout: React.FC = () => {
   return (
     <div 
       className={cn("flex flex-col w-full bg-bg-main text-text-muted overflow-hidden font-sans selection:bg-[var(--accent-primary)]/30",
-        state.isInfographicMode ? "min-h-0 h-auto" : "h-screen"
+        state.isInfographicMode ? "min-h-0 h-auto" : "h-[100dvh]"
       )}
       id="infographic-capture-root"
     >
