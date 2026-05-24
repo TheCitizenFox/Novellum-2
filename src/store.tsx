@@ -86,7 +86,6 @@ const initialState: AppState = {
   saveError: null,
   lastSaved: null,
   stateVersion: 1,
-  diagnosticLogs: [],
   isRecoveryMode: false,
 };
 
@@ -211,9 +210,27 @@ const getInitialState = (): AppState => {
       const parsed = JSON.parse(saved);
       
       // STRUCTURAL VALIDATION
-      // Must look like a state object, must have a project, and chapters array. 
-      if (!parsed || typeof parsed !== 'object' || !parsed.project || !Array.isArray(parsed.project.chapters)) {
-         throw new Error("Parsed JSON lacks required manuscript structure (missing project or chapters array).");
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error("Parsed JSON is not an object.");
+      }
+      if (!parsed.project || typeof parsed.project !== 'object') {
+        throw new Error("Parsed JSON lacks a valid project object.");
+      }
+      if (!Array.isArray(parsed.project.chapters)) {
+        throw new Error("Parsed JSON lacks a project chapters array.");
+      }
+      for (const chapter of parsed.project.chapters) {
+        if (!chapter || typeof chapter !== 'object') {
+          throw new Error("Parsed JSON contains an invalid chapter (not an object).");
+        }
+        if (!Array.isArray(chapter.scenes)) {
+          throw new Error(`Chapter "${chapter.title || 'Unknown'}" lacks a scenes array.`);
+        }
+        for (const scene of chapter.scenes) {
+          if (!scene || typeof scene !== 'object') {
+            throw new Error(`Chapter "${chapter.title || 'Unknown'}" contains an invalid scene (not an object).`);
+          }
+        }
       }
 
       parsed.snapshots = [];
