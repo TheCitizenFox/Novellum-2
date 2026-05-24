@@ -9,6 +9,7 @@ import { Settings } from './Settings';
 import { RightPanel } from './RightPanel';
 import { SnapshotsModal } from './SnapshotsModal';
 import { ManuscriptView } from './ManuscriptView';
+import { RecoveryView } from './RecoveryView';
 import { PenTool, LayoutGrid, Archive, Layers, MessageSquare, Settings as SettingsIcon, Menu, PanelRight, Clock, X, BookOpen } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { NotebookGraphic } from './Graphics';
@@ -117,6 +118,10 @@ export const Layout: React.FC = () => {
       </AnimatePresence>
     );
   };
+
+  if (state.isRecoveryMode) {
+    return <RecoveryView />;
+  }
 
   return (
     <div 

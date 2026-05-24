@@ -1,6 +1,12 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import { AppState, Project, Chapter, Scene, Snippet, StagingItem, CleanupSettings, SceneStatus, Snapshot, AppNotification } from './types';
-import { saveSnapshotDb, deleteSnapshotDb, loadSnapshotsDb } from './utils/db';
+import { 
+  saveSnapshotDb, 
+  deleteSnapshotDb, 
+  loadSnapshotsDb, 
+  saveWorkingBackupDb, 
+  loadWorkingBackupDb 
+} from './utils/db';
 
 type Action =
   | { type: 'UNDO' }
@@ -81,12 +87,147 @@ const initialState: AppState = {
   isInfographicMode: false,
   saveError: null,
   lastSaved: null,
+  stateVersion: 1,
+  diagnosticLogs: [],
+  isRecoveryMode: false,
+};
+
+// --- Schema Migrants & Safe Merges ---
+const getTotalContentLength = (project: Project): number => {
+  if (!project || !project.chapters) return 0;
+  return project.chapters.reduce((acc, c) => 
+    acc + (c.scenes || []).reduce((sAcc, s) => {
+      const mainLength = s.content?.length || 0;
+      const beatLength = s.beats?.reduce((bAcc, b) => bAcc + (b.content?.length || 0), 0) || 0;
+      return sAcc + mainLength + beatLength;
+    }, 0)
+  , 0);
+};
+
+export function migrateProject(p: any): Project {
+  if (!p || typeof p !== 'object') {
+    return {
+      id: crypto.randomUUID(),
+      title: 'Untitled Project',
+      chapters: []
+    };
+  }
+
+  const chapters = Array.isArray(p.chapters) ? p.chapters.map((chap: any): Chapter => {
+    const scenes = Array.isArray(chap.scenes) ? chap.scenes.map((scene: any): Scene => {
+      return {
+        id: scene.id || crypto.randomUUID(),
+        title: scene.title || 'Untitled Scene',
+        content: scene.content || '',
+        beats: Array.isArray(scene.beats) ? scene.beats.map((b: any) => ({
+          id: b.id || crypto.randomUUID(),
+          label: b.label || 'Beat',
+          content: b.content || '',
+        })) : [],
+        synopsis: scene.synopsis || '',
+        purpose: scene.purpose || '',
+        status: scene.status || 'draft',
+        tags: Array.isArray(scene.tags) ? scene.tags : [],
+        notes: scene.notes || '',
+      };
+    }) : [];
+
+    return {
+      id: chap.id || crypto.randomUUID(),
+      title: chap.title || 'Untitled Chapter',
+      scenes,
+    };
+  }) : [];
+
+  return {
+    id: p.id || crypto.randomUUID(),
+    title: p.title || 'Untitled Project',
+    chapters,
+  };
+}
+
+export function migrateState(s: any): AppState {
+  const base = { ...initialState };
+  if (!s || typeof s !== 'object') return { ...base, stateVersion: 1 };
+
+  const project = migrateProject(s.project);
+  
+  const settings = {
+    ...base.settings,
+    ...(s.settings || {})
+  };
+
+  const snippets = Array.isArray(s.snippets) ? s.snippets.map((snip: any) => ({
+    id: snip.id || crypto.randomUUID(),
+    content: snip.content || '',
+    category: snip.category || 'general',
+    sourceNote: snip.sourceNote || '',
+    comment: snip.comment || '',
+  })) : [];
+
+  const stagingItems = Array.isArray(s.stagingItems) ? s.stagingItems.map((item: any) => ({
+    id: item.id || crypto.randomUUID(),
+    content: item.content || '',
+  })) : [];
+
+  return {
+    ...base,
+    ...s,
+    project,
+    snippets,
+    stagingItems,
+    settings,
+    snapshots: [], // Always loaded/merged from IndexedDB separately
+    activeSceneId: s.activeSceneId || (project.chapters[0]?.scenes[0]?.id || null),
+    pastProjects: [],
+    futureProjects: [],
+    stateVersion: s.stateVersion || 1,
+    diagnosticLogs: s.diagnosticLogs || [],
+    isRecoveryMode: false,
+    recoveryData: undefined,
+  };
+}
+
+const getInitialState = (): AppState => {
+  let saved: string | null = null;
+  try {
+    saved = localStorage.getItem('novellum-state') || localStorage.getItem('nexus-writer-state');
+  } catch (e) {
+    console.error('Failed to load synchronous localStorage state:', e);
+  }
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      parsed.snapshots = [];
+      delete parsed.saveError;
+      return migrateState(parsed);
+    } catch (e) {
+      console.error('Failed to parse synchronous localStorage state:', e);
+      // FAILED TO LOAD! ENTER RECOVERY MODE!
+      
+      // Quarantine the raw data immediately so it's not lost
+      const quarantineKey = `novellum-quarantine-${Date.now()}-${crypto.randomUUID()}`;
+      try {
+        localStorage.setItem(quarantineKey, saved);
+      } catch (err) {
+         console.error('Failed to quarantine', err);
+      }
+      
+      return { 
+        ...initialState, 
+        stateVersion: 1, 
+        isRecoveryMode: true, 
+        recoveryData: saved 
+      };
+    }
+  }
+  return { ...initialState, stateVersion: 1 };
 };
 
 const baseReducer = (state: AppState, action: Action): AppState => {
   switch (action.type) {
     case 'LOAD_STATE':
-      return { ...initialState, ...action.payload, isInfographicMode: false }; // always reset on load
+      return { ...migrateState(action.payload), isInfographicMode: false }; // Safe schema migration on load & restore
     case 'SET_INFOGRAPHIC_MODE':
       return { ...state, isInfographicMode: action.payload };
     case 'SET_ACTIVE_VIEW':
@@ -200,29 +341,28 @@ const baseReducer = (state: AppState, action: Action): AppState => {
       return { ...state, settings: { ...state.settings, ...action.payload } };
     case 'CREATE_SNAPSHOT': {
       const isAuto = action.payload?.isAuto ?? false;
-      
+      const currentLen = getTotalContentLength(state.project);
+
+      // Recommendation 4: Compare current project's primary text content against the last confirmed valid snapshots
+      if (isAuto && state.snapshots && state.snapshots.length > 0) {
+        const lastSnap = state.snapshots[0];
+        const lastSnapLen = getTotalContentLength(lastSnap.project);
+        
+        // If the previous snapshot had substantial content (>1000 characters),
+        // and the current project has dropped drastically to <25% of that,
+        // bypass the auto-snapshot so we don't overwrite/prune real history with empty/blank data!
+        if (lastSnapLen > 1000 && currentLen < lastSnapLen * 0.25) {
+          console.warn(`Refusing to take an automatic snapshot because project has shrunk from ${lastSnapLen} to ${currentLen} characters! Protecting version history...`);
+          return state;
+        }
+      }
+
       // Safety guard: If this is an auto-snapshot, and the project has been emptied,
       // but we have existing snapshots containing real content, DO NOT take a snapshot or prune older snapshots!
-      const currentProjectWordCount = state.project.chapters.reduce((acc, c) => 
-        acc + c.scenes.reduce((sAcc, s) => {
-          const mainLength = s.content?.length || 0;
-          const beatLength = s.beats?.reduce((bAcc, b) => bAcc + (b.content?.length || 0), 0) || 0;
-          return sAcc + mainLength + beatLength;
-        }, 0)
-      , 0);
-
-      // If project has less than 50 characters, and we already have snapshots, check if they had content.
-      if (isAuto && currentProjectWordCount < 50 && state.snapshots.length > 0) {
-        // Find if any existing snapshot has substantial content
+      if (isAuto && currentLen < 50 && state.snapshots && state.snapshots.length > 0) {
         const hasSubstantialSnapshot = state.snapshots.some(snap => {
-          const snapCount = snap.project.chapters.reduce((acc, c) => 
-            acc + c.scenes.reduce((sAcc, s) => {
-              const mainLength = s.content?.length || 0;
-              const beatLength = s.beats?.reduce((bAcc, b) => bAcc + (b.content?.length || 0), 0) || 0;
-              return sAcc + mainLength + beatLength;
-            }, 0)
-          , 0);
-          return snapCount > 100;
+          const snapLen = getTotalContentLength(snap.project);
+          return snapLen > 100;
         });
         
         if (hasSubstantialSnapshot) {
@@ -240,7 +380,7 @@ const baseReducer = (state: AppState, action: Action): AppState => {
       // Auto-prune old auto-snapshots (keep max 60 total snapshots now with IndexedDB storage)
       return { 
         ...state, 
-        snapshots: [newSnapshot, ...state.snapshots].slice(0, 60) 
+        snapshots: [newSnapshot, ...(state.snapshots || [])].slice(0, 60) 
       };
     }
     case 'SET_SNAPSHOTS':
@@ -248,7 +388,7 @@ const baseReducer = (state: AppState, action: Action): AppState => {
     case 'RESTORE_SNAPSHOT': {
       const snapshot = state.snapshots.find(s => s.id === action.payload);
       if (!snapshot) return state;
-      return { ...state, project: JSON.parse(JSON.stringify(snapshot.project)) };
+      return { ...state, project: migrateProject(snapshot.project) }; // Safe schema restoration
     }
     case 'DELETE_SNAPSHOT':
       return { ...state, snapshots: state.snapshots.filter(s => s.id !== action.payload) };
@@ -317,16 +457,42 @@ const reducer = (state: AppState, action: Action): AppState => {
 
   const newState = baseReducer(state, action);
   
-  if (newState.project !== state.project) {
+  // Real-time System Diagnostics logs appending
+  const now = Date.now();
+  let updatedLogs = newState.diagnosticLogs || [];
+  if (
+    action.type !== 'SET_SNAPSHOTS' && 
+    action.type !== 'SET_LAST_SAVED' && 
+    action.type !== 'CLEAR_NOTIFICATION' && 
+    action.type !== 'SHOW_NOTIFICATION'
+  ) {
+    const projLen = newState.project ? getTotalContentLength(newState.project) : 0;
+    const newLog = {
+      id: crypto.randomUUID(),
+      action: action.type,
+      timestamp: now,
+      projectLength: projLen
+    };
+    updatedLogs = [newLog, ...updatedLogs].slice(0, 10);
+  }
+
+  const stateWithLogs = { ...newState, diagnosticLogs: updatedLogs };
+  
+  if (stateWithLogs.project !== state.project) {
     if (action.type === 'LOAD_STATE') {
-      return { ...newState, pastProjects: [], futureProjects: [] };
+      return { ...stateWithLogs, pastProjects: [], futureProjects: [] };
     }
     
-    const now = Date.now();
     let shouldPushHistory = true;
 
+    // Recommendation 5: Intelligent grouping of consecutive, rapid character edits
     if (action.type === 'UPDATE_SCENE_CONTENT' || action.type === 'UPDATE_BEAT_CONTENT') {
-      if (now - lastHistoryPushTime < 2000) {
+      const lastLength = getTotalContentLength(state.project);
+      const newLength = getTotalContentLength(stateWithLogs.project);
+      const lengthDiff = Math.abs(newLength - lastLength);
+      
+      // If the character count has changed incrementally (< 15 characters, like basic typing) and typing quickly
+      if (lengthDiff < 15 && now - lastHistoryPushTime < 2500) {
         shouldPushHistory = false;
       } else {
         lastHistoryPushTime = now;
@@ -338,16 +504,16 @@ const reducer = (state: AppState, action: Action): AppState => {
     if (shouldPushHistory) {
       const newPast = [...state.pastProjects, state.project].slice(-50);
       return {
-        ...newState,
+        ...stateWithLogs,
         pastProjects: newPast,
         futureProjects: []
       };
     } else {
-      return newState;
+      return stateWithLogs;
     }
   }
 
-  return newState;
+  return stateWithLogs;
 };
 
 const AppContext = createContext<{
@@ -356,43 +522,68 @@ const AppContext = createContext<{
 } | null>(null);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [state, dispatch] = useReducer(reducer, initialState);
+  const [state, dispatch] = useReducer(reducer, undefined, getInitialState);
   const [isLoaded, setIsLoaded] = React.useState(false);
   const lastSnapshotsRef = React.useRef<Snapshot[]>([]);
 
-  // Load state on mount
+  // Asynchronous load check other db backup + legacy migrator on mount
   useEffect(() => {
-    let saved = localStorage.getItem('novellum-state');
-    let legacySnapshots: Snapshot[] = [];
-    
-    // Migration from old app name
-    if (!saved) {
-      saved = localStorage.getItem('nexus-writer-state');
-      if (saved) {
-        localStorage.setItem('novellum-state', saved);
-      }
+    if (state.isRecoveryMode) {
+      // Important: halt all IndexedDB backup restoration and snapshot migration
+      // running in the background so it doesn't bypass recovery mode.
+      setIsLoaded(true);
+      return;
     }
-
+    
+    let legacySnapshots: Snapshot[] = [];
+    const saved = localStorage.getItem('novellum-state');
+    
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        // Expose legacy snapshots so we can migrate them to IndexedDB
         if (parsed.snapshots && Array.isArray(parsed.snapshots)) {
           legacySnapshots = parsed.snapshots;
         }
-        // Don't load transient state like save errors
-        delete parsed.saveError;
-        // Don't put snapshots in state yet; we'll merge them from DB
-        parsed.snapshots = [];
-        dispatch({ type: 'LOAD_STATE', payload: parsed });
       } catch (e) {
-        console.error('Failed to load state', e);
+        console.error(e);
       }
     }
     
-    // Load and migrate snapshots to IndexedDB
     const loadAndMigrateDb = async () => {
       try {
+        // --- 1. Sequential Fail-Safe Active Backup load check ---
+        let loadedBackupState: AppState | null = null;
+        try {
+          const dbBackup = await loadWorkingBackupDb();
+          if (dbBackup && dbBackup.content) {
+            const parsedBackup = JSON.parse(dbBackup.content);
+            const backupState = migrateState(parsedBackup);
+            
+            // Compare timestamps to find the most up-to-date representation
+            let localTimestamp = 0;
+            if (saved) {
+              try {
+                const parsedLocal = JSON.parse(saved);
+                localTimestamp = parsedLocal.lastSaved || 0;
+              } catch (e) {
+                console.error(e);
+              }
+            }
+            
+            const currentProjectLength = getTotalContentLength(state.project);
+            const backupProjectLength = getTotalContentLength(backupState.project);
+            
+            // Fail-safe load: if the backup has content while local is blank, or backup is strictly newer
+            if ((currentProjectLength < 50 && backupProjectLength > 50) || (dbBackup.timestamp > localTimestamp)) {
+              console.log('Failsafe check: Loading newer/complete working state backup from IndexedDB...');
+              loadedBackupState = backupState;
+            }
+          }
+        } catch (backupErr) {
+          console.error('Failed reading working active backup from IndexedDB', backupErr);
+        }
+
+        // --- 2. Synchronize Versions and Snapshots from DB ---
         const dbSnaps = await loadSnapshotsDb();
         const merged = [...dbSnaps];
         
@@ -405,10 +596,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
         
-        // Sort newest first
         merged.sort((a, b) => b.timestamp - a.timestamp);
         
-        dispatch({ type: 'SET_SNAPSHOTS', payload: merged });
+        if (loadedBackupState) {
+          loadedBackupState.snapshots = merged;
+          dispatch({ type: 'LOAD_STATE', payload: loadedBackupState });
+        } else {
+          dispatch({ type: 'SET_SNAPSHOTS', payload: merged });
+        }
+        
         lastSnapshotsRef.current = merged;
         
         if (migratedAny && saved) {
@@ -432,7 +628,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Sync snapshots to IndexedDB
   useEffect(() => {
-    if (!isLoaded) return;
+    if (!isLoaded || state.isRecoveryMode) return;
     
     const prevSnaps = lastSnapshotsRef.current;
     const currentSnaps = state.snapshots;
@@ -466,14 +662,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Auto-snapshot
   useEffect(() => {
-    if (!isLoaded) return;
+    if (!isLoaded || state.isRecoveryMode) return;
 
-    // Take an initial backup 5 seconds after load to ensure they have a session restore point
     const initialTimeout = setTimeout(() => {
       dispatch({ type: 'CREATE_SNAPSHOT', payload: { isAuto: true } });
     }, 5000);
 
-    // Take a snapshot every 10 minutes
     const intervalId = setInterval(() => {
       dispatch({ type: 'CREATE_SNAPSHOT', payload: { isAuto: true } });
     }, 10 * 60 * 1000);
@@ -482,26 +676,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       clearTimeout(initialTimeout);
       clearInterval(intervalId);
     };
-  }, [isLoaded]);
+  }, [isLoaded, state.isRecoveryMode]);
 
-  // Debounced save
+  // Recommendation 1: Sequential Transactional Dual-Save Flow
   useEffect(() => {
-    if (!isLoaded) return;
+    if (!isLoaded || state.isRecoveryMode) return;
 
-    const saveState = () => {
+    const saveState = async () => {
       try {
-        // Strip out transient state before saving
         const stateToSave = { ...state };
         delete stateToSave.saveError;
         delete (stateToSave as any).pastProjects;
         delete (stateToSave as any).futureProjects;
-        delete (stateToSave as any).snapshots; // Exclude from localStorage completely!
-        
-        localStorage.setItem('novellum-state', JSON.stringify(stateToSave));
+        delete (stateToSave as any).snapshots; // Exclude snapshots array entirely from localStorage
+
+        const now = Date.now();
+        stateToSave.lastSaved = now;
+        stateToSave.stateVersion = 1;
+
+        const stringified = JSON.stringify(stateToSave);
+
+        // --- Step 1: Write to synchronously fast primary storage (localStorage) ---
+        localStorage.setItem('novellum-state', stringified);
         dispatch({ type: 'SET_SAVE_ERROR', payload: null });
-        dispatch({ type: 'SET_LAST_SAVED', payload: Date.now() });
+        dispatch({ type: 'SET_LAST_SAVED', payload: now });
+
+        // --- Step 2: Write to larger, asynchronous IndexedDB fallback storage in sequence ---
+        try {
+          await saveWorkingBackupDb(stringified);
+        } catch (dbErr) {
+          console.error('Failed to save fail-safe active backup to IndexedDB', dbErr);
+        }
+
       } catch (e: any) {
-        console.error('Failed to save state', e);
+        console.error('Failed to save state securely', e);
         if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
           dispatch({ 
             type: 'SET_SAVE_ERROR', 

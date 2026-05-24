@@ -79,4 +79,8 @@ export interface AppState {
   saveError?: string | null;
   lastSaved?: number | null;
   notification?: AppNotification | null;
+  stateVersion?: number;
+  diagnosticLogs?: { id: string; action: string; timestamp: number; projectLength: number }[];
+  isRecoveryMode?: boolean;
+  recoveryData?: string;
 }
