@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAppStore } from '../store';
-import { Download, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { Download, AlertTriangle } from 'lucide-react';
 import { motion } from 'motion/react';
 
 export const RecoveryView: React.FC = () => {
@@ -15,14 +15,6 @@ export const RecoveryView: React.FC = () => {
     a.download = `novellum-recovery-data-${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
-  };
-
-  const handleStartFresh = () => {
-    if (window.confirm("Are you sure you want to clear your local storage and start a fresh project? Make sure you have downloaded your recovery data first!")) {
-      localStorage.removeItem('novellum-state');
-      localStorage.removeItem('nexus-writer-state');
-      window.location.reload();
-    }
   };
 
   return (
@@ -63,17 +55,8 @@ export const RecoveryView: React.FC = () => {
             Download Raw Recovery Data
           </button>
           <p className="text-center text-xs text-[#52525b] mt-1 mb-4">
-            * This file contains raw characters. It may be malformed JSON.
+            * This file contains raw characters. It may be malformed JSON or structurally invalid.
           </p>
-
-          <div className="h-[1px] w-full bg-white/5 my-2" />
-
-          <button
-            onClick={handleStartFresh}
-            className="w-full flex items-center justify-center gap-3 bg-transparent hover:bg-white/5 border border-white/10 text-[#a1a1aa] hover:text-white py-4 rounded-xl font-medium transition-all active:scale-[0.98]"
-          >
-            Clear Data & Start Fresh Project
-          </button>
         </div>
       </motion.div>
     </div>

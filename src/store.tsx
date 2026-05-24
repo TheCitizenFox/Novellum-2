@@ -3,9 +3,7 @@ import { AppState, Project, Chapter, Scene, Snippet, StagingItem, CleanupSetting
 import { 
   saveSnapshotDb, 
   deleteSnapshotDb, 
-  loadSnapshotsDb, 
-  saveWorkingBackupDb, 
-  loadWorkingBackupDb 
+  loadSnapshotsDb 
 } from './utils/db';
 
 type Action =
@@ -182,7 +180,6 @@ export function migrateState(s: any): AppState {
     pastProjects: [],
     futureProjects: [],
     stateVersion: s.stateVersion || 1,
-    diagnosticLogs: s.diagnosticLogs || [],
     isRecoveryMode: false,
     recoveryData: undefined,
   };
@@ -190,19 +187,40 @@ export function migrateState(s: any): AppState {
 
 const getInitialState = (): AppState => {
   let saved: string | null = null;
+  let hasFailedRead = false;
+  
   try {
     saved = localStorage.getItem('novellum-state') || localStorage.getItem('nexus-writer-state');
   } catch (e) {
-    console.error('Failed to load synchronous localStorage state:', e);
+    console.error('Failed to read localStorage:', e);
+    hasFailedRead = true;
   }
+  
+  // If localStorage throws, we should not blindly return a fresh valid project, as it might get autosaved over real data.
+  if (hasFailedRead) {
+    return {
+      ...initialState,
+      stateVersion: 1,
+      isRecoveryMode: true,
+      recoveryData: 'Error: Storage API is unavailable or threw an exception.'
+    };
+  }
+
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
+      
+      // STRUCTURAL VALIDATION
+      // Must look like a state object, must have a project, and chapters array. 
+      if (!parsed || typeof parsed !== 'object' || !parsed.project || !Array.isArray(parsed.project.chapters)) {
+         throw new Error("Parsed JSON lacks required manuscript structure (missing project or chapters array).");
+      }
+
       parsed.snapshots = [];
       delete parsed.saveError;
       return migrateState(parsed);
     } catch (e) {
-      console.error('Failed to parse synchronous localStorage state:', e);
+      console.error('Failed to parse or validate synchronous localStorage state:', e);
       // FAILED TO LOAD! ENTER RECOVERY MODE!
       
       // Quarantine the raw data immediately so it's not lost
@@ -457,30 +475,9 @@ const reducer = (state: AppState, action: Action): AppState => {
 
   const newState = baseReducer(state, action);
   
-  // Real-time System Diagnostics logs appending
-  const now = Date.now();
-  let updatedLogs = newState.diagnosticLogs || [];
-  if (
-    action.type !== 'SET_SNAPSHOTS' && 
-    action.type !== 'SET_LAST_SAVED' && 
-    action.type !== 'CLEAR_NOTIFICATION' && 
-    action.type !== 'SHOW_NOTIFICATION'
-  ) {
-    const projLen = newState.project ? getTotalContentLength(newState.project) : 0;
-    const newLog = {
-      id: crypto.randomUUID(),
-      action: action.type,
-      timestamp: now,
-      projectLength: projLen
-    };
-    updatedLogs = [newLog, ...updatedLogs].slice(0, 10);
-  }
-
-  const stateWithLogs = { ...newState, diagnosticLogs: updatedLogs };
-  
-  if (stateWithLogs.project !== state.project) {
+  if (newState.project !== state.project) {
     if (action.type === 'LOAD_STATE') {
-      return { ...stateWithLogs, pastProjects: [], futureProjects: [] };
+      return { ...newState, pastProjects: [], futureProjects: [] };
     }
     
     let shouldPushHistory = true;
@@ -488,32 +485,32 @@ const reducer = (state: AppState, action: Action): AppState => {
     // Recommendation 5: Intelligent grouping of consecutive, rapid character edits
     if (action.type === 'UPDATE_SCENE_CONTENT' || action.type === 'UPDATE_BEAT_CONTENT') {
       const lastLength = getTotalContentLength(state.project);
-      const newLength = getTotalContentLength(stateWithLogs.project);
+      const newLength = getTotalContentLength(newState.project);
       const lengthDiff = Math.abs(newLength - lastLength);
       
       // If the character count has changed incrementally (< 15 characters, like basic typing) and typing quickly
-      if (lengthDiff < 15 && now - lastHistoryPushTime < 2500) {
+      if (lengthDiff < 15 && Date.now() - lastHistoryPushTime < 2500) {
         shouldPushHistory = false;
       } else {
-        lastHistoryPushTime = now;
+        lastHistoryPushTime = Date.now();
       }
     } else {
-       lastHistoryPushTime = now;
+       lastHistoryPushTime = Date.now();
     }
 
     if (shouldPushHistory) {
       const newPast = [...state.pastProjects, state.project].slice(-50);
       return {
-        ...stateWithLogs,
+        ...newState,
         pastProjects: newPast,
         futureProjects: []
       };
     } else {
-      return stateWithLogs;
+      return newState;
     }
   }
 
-  return stateWithLogs;
+  return newState;
 };
 
 const AppContext = createContext<{
@@ -551,39 +548,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     
     const loadAndMigrateDb = async () => {
       try {
-        // --- 1. Sequential Fail-Safe Active Backup load check ---
-        let loadedBackupState: AppState | null = null;
-        try {
-          const dbBackup = await loadWorkingBackupDb();
-          if (dbBackup && dbBackup.content) {
-            const parsedBackup = JSON.parse(dbBackup.content);
-            const backupState = migrateState(parsedBackup);
-            
-            // Compare timestamps to find the most up-to-date representation
-            let localTimestamp = 0;
-            if (saved) {
-              try {
-                const parsedLocal = JSON.parse(saved);
-                localTimestamp = parsedLocal.lastSaved || 0;
-              } catch (e) {
-                console.error(e);
-              }
-            }
-            
-            const currentProjectLength = getTotalContentLength(state.project);
-            const backupProjectLength = getTotalContentLength(backupState.project);
-            
-            // Fail-safe load: if the backup has content while local is blank, or backup is strictly newer
-            if ((currentProjectLength < 50 && backupProjectLength > 50) || (dbBackup.timestamp > localTimestamp)) {
-              console.log('Failsafe check: Loading newer/complete working state backup from IndexedDB...');
-              loadedBackupState = backupState;
-            }
-          }
-        } catch (backupErr) {
-          console.error('Failed reading working active backup from IndexedDB', backupErr);
-        }
-
-        // --- 2. Synchronize Versions and Snapshots from DB ---
+        // --- Synchronize Versions and Snapshots from DB ---
         const dbSnaps = await loadSnapshotsDb();
         const merged = [...dbSnaps];
         
@@ -598,12 +563,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         
         merged.sort((a, b) => b.timestamp - a.timestamp);
         
-        if (loadedBackupState) {
-          loadedBackupState.snapshots = merged;
-          dispatch({ type: 'LOAD_STATE', payload: loadedBackupState });
-        } else {
-          dispatch({ type: 'SET_SNAPSHOTS', payload: merged });
-        }
+        dispatch({ type: 'SET_SNAPSHOTS', payload: merged });
         
         lastSnapshotsRef.current = merged;
         
@@ -696,17 +656,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         const stringified = JSON.stringify(stateToSave);
 
-        // --- Step 1: Write to synchronously fast primary storage (localStorage) ---
+        // --- Write to synchronously fast primary storage (localStorage) ---
         localStorage.setItem('novellum-state', stringified);
         dispatch({ type: 'SET_SAVE_ERROR', payload: null });
         dispatch({ type: 'SET_LAST_SAVED', payload: now });
-
-        // --- Step 2: Write to larger, asynchronous IndexedDB fallback storage in sequence ---
-        try {
-          await saveWorkingBackupDb(stringified);
-        } catch (dbErr) {
-          console.error('Failed to save fail-safe active backup to IndexedDB', dbErr);
-        }
 
       } catch (e: any) {
         console.error('Failed to save state securely', e);
