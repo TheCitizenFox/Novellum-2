@@ -185,14 +185,25 @@ export function migrateState(s: any): AppState {
 }
 
 const getInitialState = (): AppState => {
-  let saved: string | null = null;
+  let savedValue: string | null = null;
+  let isFirstTime = true;
   let hasFailedRead = false;
   
   try {
-    saved = localStorage.getItem('novellum-state') || localStorage.getItem('nexus-writer-state');
+    const primaryStr = localStorage.getItem('novellum-state');
+    const legacyStr = localStorage.getItem('nexus-writer-state');
+    
+    if (primaryStr !== null) {
+      savedValue = primaryStr;
+      isFirstTime = false;
+    } else if (legacyStr !== null) {
+      savedValue = legacyStr;
+      isFirstTime = false;
+    }
   } catch (e) {
     console.error('Failed to read localStorage:', e);
     hasFailedRead = true;
+    isFirstTime = false;
   }
   
   // If localStorage throws, we should not blindly return a fresh valid project, as it might get autosaved over real data.
@@ -205,9 +216,26 @@ const getInitialState = (): AppState => {
     };
   }
 
-  if (saved) {
+  if (!isFirstTime) {
+    // Treat empty string or whitespace-only value as a fail-state, since it represents present-but-unloadable data.
+    if (savedValue === null || savedValue.trim() === '') {
+      const quarantineKey = `novellum-quarantine-${Date.now()}-${crypto.randomUUID()}`;
+      try {
+        localStorage.setItem(quarantineKey, savedValue || "");
+      } catch (err) {
+         console.error('Failed to quarantine', err);
+      }
+      
+      return { 
+        ...initialState, 
+        stateVersion: 1, 
+        isRecoveryMode: true, 
+        recoveryData: savedValue || "" 
+      };
+    }
+
     try {
-      const parsed = JSON.parse(saved);
+      const parsed = JSON.parse(savedValue);
       
       // STRUCTURAL VALIDATION
       if (!parsed || typeof parsed !== 'object') {
@@ -243,7 +271,7 @@ const getInitialState = (): AppState => {
       // Quarantine the raw data immediately so it's not lost
       const quarantineKey = `novellum-quarantine-${Date.now()}-${crypto.randomUUID()}`;
       try {
-        localStorage.setItem(quarantineKey, saved);
+        localStorage.setItem(quarantineKey, savedValue);
       } catch (err) {
          console.error('Failed to quarantine', err);
       }
@@ -252,7 +280,7 @@ const getInitialState = (): AppState => {
         ...initialState, 
         stateVersion: 1, 
         isRecoveryMode: true, 
-        recoveryData: saved 
+        recoveryData: savedValue 
       };
     }
   }
